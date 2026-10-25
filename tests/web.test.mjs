@@ -8,7 +8,7 @@ const spot={price:75,symbol:'TVC:USOIL',timestamp_utc:new Date().toISOString(),s
 const response=(status,body,type='application/json')=>new Response(typeof body==='string'?body:JSON.stringify(body),{status,headers:{'content-type':type}});
 function ui(fetchForecast){
  const elements={};
- const get=id=>elements[id]??=( {value:id==='leverage'?'5':id==='target'?'78':id==='chart-horizon'?'168':'',textContent:'',innerHTML:'',hidden:false,dataset:{},disabled:false,events:{},addEventListener(type,fn){this.events[type]=fn},setAttribute(key,value){this[key]=value}} );
+ const get=id=>elements[id]??=( {value:id==='leverage'?'5':id==='target'?'78':id==='chart-horizon'?'168':'',textContent:'',innerHTML:'',hidden:false,dataset:{},disabled:false,events:{},replaceChildren(){this.innerHTML=''},addEventListener(type,fn){this.events[type]=fn},setAttribute(key,value){this[key]=value}} );
  const context=vm.createContext({document:{getElementById:get},fetch:async(path,options)=>path==='/api/market'?response(200,{quote:spot}):fetchForecast(path,options),AbortSignal,Date,console,setTimeout:()=>0,setInterval:()=>0});
  vm.runInContext(script,context);
  const api=vm.runInContext('({calculate,render,clearResults,projectionChart})',context);

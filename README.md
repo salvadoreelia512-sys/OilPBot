@@ -2,7 +2,7 @@
 
 A minimal WTI oil target-probability app. Enter a **target price**, choose **long or
 short**, and select **leverage**. The app returns the estimated probability of touching
-the target in **1 hour, 3 hours, 5 hours, 1 calendar day and 1 calendar week**, a
+the target in **1 hour, 3 hours, 5 hours, 1 calendar day, 1 calendar week and 1 calendar month**, a
 probability chart, and a projected median / 10–90% price range.
 
 Leverage affects the implied return at the target, not the market's touch probability.
@@ -23,8 +23,9 @@ There are no user inputs for OVX, required return, or data mode.
   During closures, the latest close is accepted only if no more than 15 minutes of
   scheduled trading have elapsed since its timestamp (and it is under 96 hours old).
   The UI explicitly labels it **Market closed · last session quote**.
-- The model uses geometric Brownian motion with zero arithmetic drift and an automatic
-  single-session Parkinson high/low volatility estimate, bounded to 10–150% annualized.
+- The model uses shared jump-diffusion Monte Carlo paths, a momentum drift gated by
+  sampling uncertainty, and an automatic volatility blend. Its cold-start baseline is
+  the single-session Parkinson high/low estimate, bounded to 10–150% annualized.
   This is preliminary and uncalibrated; percentages are model estimates, not measured
   accuracy. A price fan shows model uncertainty, not the actual future path.
 - Horizons start at the request time. The regular WTI schedule excludes weekends and
@@ -67,7 +68,7 @@ in Netlify to the backend HTTPS origin. The Node function forwards `/api/market`
 
 - `GET /api/market`: timestamped TVC:USOIL quote, automatic freshness/closure status.
 - `POST /api/forecast`: `{ "target_price": 105, "direction": "long", "leverage": 5 }`.
-  Returns five horizon estimates, projection points, model assumptions, underlying
+  Returns six horizon estimates, projection points, model assumptions, underlying
   move and implied leveraged return. Invalid inputs return 422, unavailable data 503.
 - `GET /openapi.json`: complete API schema.
 
@@ -87,3 +88,35 @@ Tests cover source identity/parsing, caching and recovery, stale-data guards, re
 market hours and DST, monotone horizon probabilities, leverage independence, input
 validation, UI state and charts, proxy routes, and legacy simulation/calibration logic.
 A controlled-feed test does not establish live-source access or probability calibration.
+
+## Evidence-aware Monte Carlo update
+
+The main forecast now runs 12,000 shared jump-diffusion paths through one month,
+with common random numbers across requests, Brownian-bridge barrier corrections
+(approximate when jumps occur), and 10th/50th/90th percentile scenarios. Higher
+cumulative touch probabilities at longer horizons are expected, not instability.
+The reported sampling margin describes Monte Carlo noise, not forecast accuracy.
+
+BBC World and EIA Today in Energy RSS are fetched without keys, cached for ten
+minutes, filtered for oil-relevant dated articles, clustered, scored and decayed.
+News raises volatility/jump uncertainty; headlines do not automatically imply a
+price direction. Feed availability and actual headlines are visible under Evidence.
+This limited rule-based coverage is not comprehensive geopolitical intelligence.
+There are no new paid services, API keys, AI providers, or AIS subscriptions.
+
+Distinct TVC quote observations accumulate in SQLite when the source refreshes.
+After at least 20 return intervals spanning four trading hours, empirical volatility
+is blended with session-range volatility. Shrunk momentum is used only when its
+approximate sampling interval excludes zero. Sparse observations are not minute bars;
+weekend gaps are not treated as continuous trading. Render free-instance restarts
+may lose this history without a persistent volume, and an inactive service does not
+collect uninterrupted data.
+
+The experimental outlook can suggest long/short, a one-week reference target, or
+WAIT. It waits for insufficient history, incomplete feed coverage, closed markets,
+or inconclusive momentum. Leverage is a 1× reference, not personalized sizing.
+No calibrated hit rate, profitable edge, safe leverage, or precise geopolitical
+price effect is claimed. The news adjustment has not passed an out-of-sample gate;
+existing calibration harnesses remain available for future validation. Live inventory
+surprises, USD/rates, positioning, term structure, AIS and holiday schedules remain
+unmodeled. A percentile line is not a worst/best possible bound or a coherent path.

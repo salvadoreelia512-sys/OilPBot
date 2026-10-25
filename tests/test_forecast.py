@@ -108,7 +108,7 @@ def test_endpoints_and_minimal_inputs(monkeypatch):
         assert client.get('/api/market').json()['quote']['symbol']=='TVC:USOIL'
         r=client.post('/api/forecast',json={'target_price':78,'direction':'long','leverage':5})
         assert r.status_code==200,r.text
-        assert len(r.json()['horizons'])==5
+        assert len(r.json()['horizons'])==6
         for payload in [{'target_price':-1,'direction':'long'}, {'target_price':78,'direction':'long','ovx':32}, {'target_price':78,'direction':'long','leverage':0}]:
             assert client.post('/api/forecast',json=payload).status_code==422
         assert 'Price data mode' not in client.get('/').text
