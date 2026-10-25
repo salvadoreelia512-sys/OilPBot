@@ -213,7 +213,7 @@
                     loading.value = true;
                     errorMessage.value = '';
                     try {
-                        const resp = await fetch('/api/predict', {
+                        const resp = await fetch('/predict', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify(form.value)
@@ -236,23 +236,26 @@
 
                 onMounted(() => {
                     fetchPrediction();
-                    // Connect WebSocket for live price & health ticker
-                    const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-                    const ws = new WebSocket(`${proto}//${window.location.host}/ws`);
-                    ws.onmessage = (event) => {
-                        try {
-                            const msg = JSON.parse(event.data);
-                            if (msg.type === 'tick') {
-                                currentPrice.value = msg.price;
-                                currentSource.value = msg.source;
-                                tickAge.value = msg.age_seconds;
-                                serverHealth.value = msg.health;
-                            } else if (msg.type === 'error') {
-                                errorMessage.value = msg.detail;
-                                serverHealth.value = 'stale_or_down';
-                            }
-                        } catch (e) {}
-                    };
+                    try {
+                        const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                        const ws = new WebSocket(`${proto}//${window.location.host}/ws`);
+                        ws.onmessage = (event) => {
+                            try {
+                                const msg = JSON.parse(event.data);
+                                if (msg.type === 'tick') {
+                                    currentPrice.value = msg.price;
+                                    currentSource.value = msg.source;
+                                    tickAge.value = msg.age_seconds;
+                                    serverHealth.value = msg.health;
+                                } else if (msg.type === 'error') {
+                                    errorMessage.value = msg.detail;
+                                    serverHealth.value = 'stale_or_down';
+                                }
+                            } catch (e) {}
+                        };
+                    } catch (e) {
+                        console.log("WebSockets disabled in serverless env");
+                    }
                 });
 
                 return {
