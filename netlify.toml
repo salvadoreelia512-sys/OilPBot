@@ -6,6 +6,11 @@
   directory = "netlify/functions"
 
 [[redirects]]
+  from = "/predict"
+  to = "/.netlify/functions/api"
+  status = 200
+
+[[redirects]]
   from = "/api/*"
   to = "/.netlify/functions/api"
   status = 200
