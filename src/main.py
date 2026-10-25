@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional, Literal
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, FileResponse
 from pydantic import BaseModel, Field, model_validator
 import pandas as pd
 from starlette.concurrency import run_in_threadpool
@@ -16,6 +16,7 @@ from src.volatility import VolatilityEngine
 from src.simulation import SimulationEngine
 from src.news import NewsRiskAdjuster
 from src.ais import HormuzMonitor
+from src.forecast import router as forecast_router
 
 app = FastAPI(
     title="Oil Probability Bot",
@@ -30,6 +31,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(forecast_router)
 
 settings = BotSettings()
 
@@ -249,3 +252,8 @@ def serve_ui():
         with open(html_path, "r", encoding="utf-8") as f:
             return f.read()
     return "<h1>Oil Probability Bot API Running</h1><p>Visit <a href='/docs'>/docs</a> for Swagger UI.</p>"
+
+
+@app.get("/app.js")
+def frontend_script():
+    return FileResponse(Path(__file__).resolve().parent.parent / "templates" / "app.js", media_type="text/javascript")

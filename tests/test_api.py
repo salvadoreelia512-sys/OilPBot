@@ -87,7 +87,7 @@ def test_today_cutoff_does_not_roll_to_tomorrow(client,monkeypatch):
 
 def test_ui_from_other_working_directory(client, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
-    assert 'Intraday Merton' in client.get('/').text
+    assert 'Oil, simplified.' in client.get('/').text
     assert client.get('/api/health').json()['status'] == 'stale_or_down'
     assert client.get('/api/quote').status_code == 200
     assert client.get('/api/health').json()['status'] == 'ok'
