@@ -1,0 +1,14 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "oil-prob-bot"
+version = "0.5.0"
+description = "Intraday Oil Price First-Passage Probability, Volatility, Calibration, News & Hormuz AIS Risk Engine"
+readme = "README.md"
+requires-python = ">=3.10"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
