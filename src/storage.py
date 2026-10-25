@@ -14,12 +14,14 @@ class StorageUnavailable(RuntimeError):
     pass
 
 
-MODEL_VERSION = 'news-mc-v1'
+MODEL_VERSION = 'news-mc-v2-history'
 
 
 class Connection:
     def __init__(self, raw, postgres):
         self.raw, self.postgres = raw, postgres
+    def executemany(self, sql, rows):
+        return self.raw.cursor().executemany(sql.replace('?', '%s') if self.postgres else sql, rows)
     def execute(self, sql, values=()):
         return self.raw.execute(sql.replace('?', '%s') if self.postgres else sql, values)
 
@@ -49,6 +51,8 @@ def connect():
 
 
 SCHEMA = [
+    'CREATE TABLE IF NOT EXISTS oil_historical (series TEXT NOT NULL, day TEXT NOT NULL, value DOUBLE PRECISION NOT NULL, source TEXT NOT NULL, PRIMARY KEY(series,day))',
+    'CREATE TABLE IF NOT EXISTS oil_archives (id TEXT PRIMARY KEY, report TEXT NOT NULL)',
     'CREATE TABLE IF NOT EXISTS tvc_observations (ts DOUBLE PRECISION PRIMARY KEY, price DOUBLE PRECISION NOT NULL)',
     'CREATE TABLE IF NOT EXISTS oil_news (id TEXT PRIMARY KEY, published DOUBLE PRECISION NOT NULL, title TEXT NOT NULL, url TEXT NOT NULL)',
     'CREATE TABLE IF NOT EXISTS oil_forecasts (id TEXT PRIMARY KEY, created DOUBLE PRECISION NOT NULL, quote_ts DOUBLE PRECISION NOT NULL, target DOUBLE PRECISION NOT NULL, direction TEXT NOT NULL, model_version TEXT NOT NULL, evidence TEXT NOT NULL)',
@@ -119,13 +123,14 @@ def statistics(now=None):
         count=db.execute('SELECT COUNT(*) FROM tvc_observations').fetchone()[0]
         forecasts=db.execute('SELECT COUNT(*) FROM oil_forecasts').fetchone()[0]
         news=db.execute('SELECT COUNT(*) FROM oil_news').fetchone()[0]
+        historical=db.execute('SELECT COUNT(*) FROM oil_historical').fetchone()[0]
         statuses=dict(db.execute('SELECT status,COUNT(*) FROM oil_outcomes GROUP BY status').fetchall())
         rows=db.execute('SELECT hours,probability,outcome FROM oil_outcomes WHERE outcome IS NOT NULL').fetchall()
     groups={}
     for hours,p,y in rows:
         groups.setdefault(hours,[]).append((p,y))
     return {'backend':'postgresql' if os.getenv('DATABASE_URL') else 'sqlite', 'connected':True,
-            'observations':count,'forecasts':forecasts,'news_articles':news,'outcomes':statuses,
+            'historical_observations':historical,'observations':count,'forecasts':forecasts,'news_articles':news,'outcomes':statuses,
             'observation_based_brier_by_horizon':[{'hours':h,'count':len(v),'score':sum((p-y)**2 for p,y in v)/len(v)} for h,v in sorted(groups.items())],
             'limitations':'Observation-based diagnostics, not validated continuous-touch accuracy. Brief touches may be missed, gaps are excluded, overlapping forecasts are correlated. No hit-rate claim before adequate independent out-of-sample data.',
             'collection':'Only while the service is active; Render free sleep interrupts collection.'}

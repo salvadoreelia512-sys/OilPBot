@@ -77,12 +77,18 @@ def enhance(result, snapshot, request, now, context=None, observations=None):
         if hours>0:
             returns.append(math.log(p1/p0));durations.append(hours/(252*23))
     mature=len(returns)>=20 and sum(durations)*(252*23)>=4
-    sigma=result['model']['annual_volatility']
+    from src.historical import load, summary
+    archive=load()
+    prior=archive['annual_volatility_prior']
+    sigma=.8*prior+.2*result['model']['annual_volatility']
     drift=0.; direction='wait'
-    if mature:
+    if len(returns)>=5 and sum(durations)>0:
         variance=float(np.mean(np.square(returns)/np.array(durations)))
         empirical=max(.10,min(1.5,math.sqrt(variance)))
-        sigma=.7*empirical+.3*sigma
+        # Gradually admit live volatility, rather than switching abruptly at warmup.
+        weight=.7*min(1.,len(returns)/100,sum(durations)*(252*23)/24)
+        sigma=(1-weight)*sigma+weight*empirical
+    if mature:
         raw=sum(returns)/sum(durations)
         se=sigma/math.sqrt(sum(durations))
         if abs(raw)>1.96*se:
@@ -102,18 +108,20 @@ def enhance(result, snapshot, request, now, context=None, observations=None):
         paths+=(drift-.5*sigma*sigma)*delay+sigma*math.sqrt(delay)*rng.standard_normal(n)
     log_target=math.log(request.target_price)
     for hour in range(721):
+        step_rng=np.random.default_rng(20261025+hour)
+        jump_rng=np.random.default_rng(20271025+hour)
         if hour:
             dt=trading_hours(now+timedelta(hours=hour-1),now+timedelta(hours=hour))/(252*23)
             previous=paths.copy()
             if dt:
-                counts=rng.poisson(jumps*dt,n)
+                counts=jump_rng.poisson(jumps*dt,n)
                 k=math.exp(.5*.025**2)-1
-                paths+=(drift-.5*sigma*sigma-jumps*k)*dt+sigma*math.sqrt(dt)*rng.standard_normal(n)+np.sqrt(counts)*.025*rng.standard_normal(n)
+                paths+=(drift-.5*sigma*sigma-jumps*k)*dt+sigma*math.sqrt(dt)*step_rng.standard_normal(n)+np.sqrt(counts)*.025*jump_rng.standard_normal(n)
                 a=log_target-previous if request.direction=='long' else previous-log_target
                 b=log_target-paths if request.direction=='long' else paths-log_target
                 crossed=(a<=0)|(b<=0)
                 bridge=np.exp(np.minimum(0,-2*np.maximum(a,0)*np.maximum(b,0)/(sigma*sigma*dt)))
-                touched|=crossed|(rng.random(n)<bridge)
+                touched|=crossed|(step_rng.random(n)<bridge)
         else:
             touched|=paths>=log_target if request.direction=='long' else paths<=log_target
         prices=np.exp(paths);low,median,high=np.quantile(prices,[.1,.5,.9])
@@ -134,10 +142,13 @@ def enhance(result, snapshot, request, now, context=None, observations=None):
                        'target_price':target,'leverage':1,
                        'reason':'Momentum exceeds its sampling uncertainty; experimental outlook, not a validated trading edge.' if can_suggest else '; '.join(wait_reasons)+'.',
                        'risk_note':'1× unleveraged reference only; no personalized leverage without loss limits and liquidation modeling.'}
+    result['historical_context']=summary(archive)
+    result['outlook']['conditional_setups']=[{'direction':'long','trigger':snapshot.high*1.001,'target':snapshot.high*1.001*math.exp(sigma*math.sqrt(115/(252*23))*.5)}, {'direction':'short','trigger':snapshot.low*.999,'target':snapshot.low*.999*math.exp(-sigma*math.sqrt(115/(252*23))*.5)}]
+    result['outlook']['setup_notice']='Watch-only breakout scenarios, not active entries. Targets are volatility-based, not validated recommendations.'
     result['evidence']={'observations':len(observations),'history_ready':mature,'news':context,
                        'validation':'Uncalibrated: no measured out-of-sample accuracy is claimed. News affects volatility and jump risk, not price direction.',
                        'unmodeled':'Live inventories, USD/rates, futures curve, positioning, AIS, holidays and execution costs are not integrated.'}
-    result['model'].update({'annual_volatility':sigma,'basis':f'12,000-path jump-diffusion Monte Carlo · history + decayed news risk · drift {drift:.3f}',
+    result['model'].update({'annual_volatility':sigma,'basis':f'12,000-path jump-diffusion Monte Carlo · historical WTI volatility prior + observed prices + decayed news risk · drift {drift:.3f}',
                             'interval':'10th / 50th / 90th percentile scenarios; not worst/best bounds or individual simulated paths',
                             'assumptions':'Common paths across horizons; Brownian-bridge touch correction (approximate with jumps); regular WTI schedule; uncalibrated.',
                             'sampling_note':'Intervals quantify simulation noise only, not model error or forecast accuracy.'})

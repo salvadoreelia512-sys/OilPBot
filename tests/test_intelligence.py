@@ -47,3 +47,16 @@ def test_news_feed_dates_coverage_and_dedup(monkeypatch):
     assert all(h['title']==title for h in data['headlines'])
     assert len(data['drivers'])==1
     assert data['vol_multiplier']>1 or data['jump_intensity']>0
+
+def test_small_risk_change_does_not_resample_diffusion():
+    a=run();b=run(context={**C,'vol_multiplier':1.001})
+    assert max(abs(x['probability']-y['probability']) for x,y in zip(a['horizons'],b['horizons'])) < .02
+
+def test_volatility_has_no_warmup_threshold_jump():
+    q=ForecastRequest(target_price=78,direction='long')
+    def with_count(count):
+        observations=[((NOW-timedelta(hours=4)+timedelta(hours=4*i/(count-1))).timestamp(),75) for i in range(count)]
+        return enhance(estimate(S,q,NOW),S,q,NOW,context=C,observations=observations)
+    before,after=with_count(20),with_count(21)
+    assert abs(before['model']['annual_volatility']-after['model']['annual_volatility'])<.01
+    assert max(abs(a['probability']-b['probability']) for a,b in zip(before['horizons'],after['horizons']))<.02

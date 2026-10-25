@@ -42,7 +42,7 @@ class MockStaticAdapter(PriceAdapter):
 
 
 def test_failover_recovers_from_primary_outage(tmp_path):
-    now = datetime.now(timezone.utc)
+    now = datetime(2026, 10, 21, 12, tzinfo=timezone.utc)
     settings = BotSettings(
         max_staleness_seconds=60.0,
         sqlite_db_path=str(tmp_path / "test_bars.db"),
@@ -63,7 +63,7 @@ def test_failover_recovers_from_primary_outage(tmp_path):
 
 
 def test_stale_data_refuses_output(tmp_path):
-    now = datetime.now(timezone.utc)
+    now = datetime(2026, 10, 21, 12, tzinfo=timezone.utc)
     settings = BotSettings(
         max_staleness_seconds=60.0,
         sqlite_db_path=str(tmp_path / "test_stale.db"),

@@ -61,3 +61,14 @@ test('proxy supports the new market and forecast endpoints',async()=>{
   assert.equal((await handler({path:'/api/market',httpMethod:'GET'})).statusCode,502);
  }finally{globalThis.fetch=nativeFetch;if(saved===undefined)delete process.env.OILPBOT_API_URL;else process.env.OILPBOT_API_URL=saved}
 });
+
+test('projection uses local date/time ticks and interpolated crossing marker',()=>{
+ const {api}=ui(async()=>response(200,fixture()));const data=fixture();
+ data.projection=[{hours:0,low:75,median:75,high:75},{hours:1,low:74,median:76,high:79}];
+ const markup=api.projectionChart(data,1);
+ assert.match(markup,/data-crossing="high"/);
+ assert.match(markup,/Scenario crossing/);
+ assert.doesNotMatch(markup,/\+1 hours/);
+ data.target_price=100;
+ assert.match(api.projectionChart(data,1),/No displayed scenario crosses/);
+});

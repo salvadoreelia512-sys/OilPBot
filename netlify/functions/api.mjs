@@ -7,7 +7,7 @@ export async function handler(event) {
     });
     let path = event.path.replace(/^\/\.netlify\/functions\/api/, '/api');
     if (path === '/predict' || path === '/health') path = '/api' + path;
-    const routes = { '/api/statistics': 'GET', '/api/market': 'GET', '/api/forecast': 'POST', '/api/predict': 'POST', '/api/quote': 'GET', '/api/health': 'GET' };
+    const routes = { '/api/historical': 'GET', '/api/statistics': 'GET', '/api/market': 'GET', '/api/forecast': 'POST', '/api/predict': 'POST', '/api/quote': 'GET', '/api/health': 'GET' };
     if (!routes[path]) return json(404, 'Unknown API route.');
     if (event.httpMethod !== routes[path]) return json(405, 'Method not allowed.');
     const base = process.env.OILPBOT_API_URL;

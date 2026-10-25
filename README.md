@@ -153,3 +153,44 @@ free instances sleeping, backfill historical data, or provide uninterrupted coll
 Records are retained without automatic age deletion; monitor Neon free-tier storage
 and export/back up or archive records before reaching its limits. Never share a
 PostgreSQL URL in chat, logs, screenshots or source control.
+
+## Historical context and forecast stability
+
+The versioned `src/data/history.json` archive covers December 2024 onward: 470 EIA
+WTI spot observations, 475 Yahoo S&P 500 daily observations, and 688 daily geopolitical
+risk index observations from Caldara and Iacoviello's published GPR dataset. Exact
+coverage, sources, SHA-256 source fingerprints and validation are available at
+`/api/historical`. This endpoint and forecasts synchronize all 1,633 observations to
+Neon once per archive version. It is not exact TVC history or an archive of all news.
+Archive endpoints vary: WTI through 2026-10-20, stocks through 2026-10-23, GPR through
+2026-10-19. The frozen archive does not refresh automatically.
+
+The expanding-window daily-return regression uses only earlier training rows, with
+training-only feature scaling, a conservative 7-day GPR availability lag and 1-day
+stock lag. On 364 held-out daily cases, model MSE was 0.001110 versus the zero-drift
+baseline's 0.001075; directional accuracy was 51.9%. This candidate was NOT promoted.
+Revised historical datasets are not point-in-time vintages; this is not an unbiased
+real-time strategy simulation or validation of intraday barrier-touch accuracy.
+
+The last 60 WTI spot returns form an EWMA annual volatility prior. Cold-start volatility
+blends 80% of this proxy prior with 20% of current TVC session range volatility. Live volatility is admitted gradually with observation count and trading-time coverage,
+capped at 70% weight, avoiding an abrupt switch at the warmup threshold.
+Stock/GPR return coefficients are not used to create a directional edge that failed
+validation. Current news still adjusts jump/volatility risk immediately.
+
+Each simulation hour now uses separately seeded diffusion/bridge and jump streams.
+Minor news changes do not scramble all subsequent diffusion draws. No probability
+clipping or cosmetic smoothing hides real price/risk changes. Percentages remain
+uncalibrated estimates, and accumulating independent outcomes is still necessary.
+
+The chart displays local date/time ticks for the selected horizon. Its guide marks
+the earliest interpolated crossing of any of the displayed percentile curves, with
+a point and short local tangent. It does not forecast an actual first-passage time;
+when no curve crosses, the chart explicitly says so. Watch-only long/short breakout
+triggers and volatility-based targets accompany WAIT; they are conditional scenarios,
+not an instruction to enter before the evidence gate passes.
+
+To rebuild the archive, install optional builder dependencies `xlrd`, `yfinance` and
+`httpx`, then run `python scripts/build_history.py`. Cached public source files in
+`/tmp` are reused; absent files are fetched with normal TLS verification. Inspect
+coverage and rerun validation before publishing a changed archive.

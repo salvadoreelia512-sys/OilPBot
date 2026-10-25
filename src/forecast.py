@@ -221,6 +221,8 @@ def forecast(request: ForecastRequest):
     snapshot = feed.get()
     from src.intelligence import enhance
     now = datetime.now(timezone.utc)
+    from src.historical import sync_archive
+    sync_archive()
     result = enhance(estimate(snapshot, request, now), snapshot, request, now)
     from src.storage import save_forecast
     result['forecast_id'] = save_forecast(result, now)
@@ -234,3 +236,9 @@ def statistics_endpoint():
         return statistics()
     except Exception:
         raise HTTPException(status_code=503, detail="Database unavailable. Check DATABASE_URL and database connectivity in Render; credentials are never displayed.")
+
+
+@router.get("/api/historical")
+def historical_endpoint():
+    from src.historical import sync_archive, summary
+    return summary(sync_archive())
