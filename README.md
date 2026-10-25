@@ -108,6 +108,80 @@ source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 cp .env.example .env
 
-# Run FastAPI server locally or deploy to Netlify / GitHub
+# Run the application (GitHub Pages alone cannot run the Python backend)
+python -m uvicorn src.main:app --host 0.0.0.0 --port 8000
+# Run tests separately
 pytest -v
 ```
+
+## Run the application
+
+Use Python 3.10 or newer (Python 3.12 is tested):
+
+```bash
+python -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+cp .env.example .env  # Only for a new checkout; preserve an existing .env.
+.venv/bin/python -m uvicorn src.main:app --host 0.0.0.0 --port 8000
+```
+
+Open the host running this service. FastAPI serves both the UI and JSON API; publishing
+`templates/index.html` alone does not run the prediction engine. SQLite needs a writable
+path (`SQLITE_DB_PATH`); mount persistent storage when deploying the backend.
+A Dockerfile is provided for Python/container hosts, listening on port 8000. The image
+uses `/data/oil_bot.db`; mount a writable volume at `/data` for persistence. The Docker
+image was built and validated with local HTTP checks, a controlled-feed prediction,
+and non-root SQLite writes. This does not verify a production deployment.
+
+### Netlify frontend
+
+Netlify hosts the static frontend and the Node proxy in `netlify/functions/api.mjs`.
+Deploy the Python service above separately, then set **OILPBOT_API_URL** in Netlify to
+its HTTPS origin, for example `https://your-api.example.com` (no path or credentials).
+Redeploy the Netlify site after setting this variable. It must point to the backend,
+not back to the Netlify frontend. Netlify's proxy preserves JSON error responses and
+returns a readable configuration error if the backend is missing. Python files in
+Netlify's functions directory are not a supported Python server deployment.
+
+The frontend uses `/api/predict` and polls `/api/quote`, so it works with both FastAPI
+and Netlify without requiring WebSocket support. The backend's `/ws` remains available
+to direct ASGI clients. A static-only preview needs an API reverse proxy; otherwise,
+run the full FastAPI app on a host that supports Python.
+
+### Prices and honest status
+
+`MARKET_SYMBOL=CL=F` (default) uses Yahoo oil futures. `MARKET_SYMBOL=USO` selects
+USO ETF shares and enables same-symbol Finnhub, Twelve Data, Yahoo, and Alpaca failover.
+`MARKET_SYMBOL=WTI/USD` selects Twelve Data spot oil. These instruments have different
+prices; choose a target appropriate to the selected instrument. The API never silently
+substitutes USO shares for an oil futures contract. Configure provider keys securely in
+host environment settings or an untracked `.env` file. Outbound access to the selected
+provider must also be allowed. Yahoo typically needs `query1.finance.yahoo.com`,
+`query2.finance.yahoo.com`, `fc.yahoo.com`, and `guce.yahoo.com`. Other supported price
+API destinations are `finnhub.io`, `api.twelvedata.com`, and `data.alpaca.markets`.
+
+The app starts disconnected, displays no invented price, and ages the last verified tick
+locally. Closed markets, delayed quotes, missing keys, and provider outages can all prevent
+a fresh quote. Prices older than 60 seconds are refused; the UI allows retries after a
+failure. No sample data is substituted for a live price. Sparse history is explicitly
+marked as warmup: the volatility engine uses a flat-price series with an OVX anchor.
+Predictions after today's 23:30 Dubai cutoff return a session-closed response rather than
+silently forecasting tomorrow. Predictions resume after midnight Dubai time; quote
+freshness still determines whether a prediction is allowed.
+
+News and AIS parsers, monitors, and calibration harnesses are implemented, but the web
+server does not automatically start live news/AIS ingestion. Do not interpret an empty
+risk panel as proof that external news or AIS feeds are running.
+
+### Validation
+
+```bash
+python -m pytest -v
+node --test tests/web.test.mjs
+```
+
+The Python suite covers the models, calibration, news/AIS logic, and API predictions
+with controlled feeds, including empty history, invalid inputs, stale/down feed recovery,
+instrument consistency, and session cutoff. Node's built-in test runner (Node 20+)
+checks frontend state/error handling and the Netlify proxy. Controlled-feed tests are
+not evidence of live market access or a successful production deployment.

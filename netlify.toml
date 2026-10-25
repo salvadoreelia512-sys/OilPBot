@@ -1,19 +1,26 @@
 [build]
-  command = "pip install -r requirements.txt"
   publish = "templates"
 
 [functions]
   directory = "netlify/functions"
 
 [[redirects]]
-  from = "/predict"
-  to = "/.netlify/functions/api"
+  from = "/api/*"
+  to = "/.netlify/functions/api/:splat"
   status = 200
+  force = true
 
 [[redirects]]
-  from = "/api/*"
-  to = "/.netlify/functions/api"
+  from = "/predict"
+  to = "/.netlify/functions/api/predict"
   status = 200
+  force = true
+
+[[redirects]]
+  from = "/health"
+  to = "/.netlify/functions/api/health"
+  status = 200
+  force = true
 
 [[redirects]]
   from = "/*"

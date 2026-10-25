@@ -67,6 +67,7 @@ def test_stale_data_refuses_output(tmp_path):
     settings = BotSettings(
         max_staleness_seconds=60.0,
         sqlite_db_path=str(tmp_path / "test_stale.db"),
+        market_symbol="USO",
     )
     stale_adapter = MockStaticAdapter("finnhub", 75.10, now - timedelta(seconds=125))
     service = PriceService(adapters=[stale_adapter], settings=settings)

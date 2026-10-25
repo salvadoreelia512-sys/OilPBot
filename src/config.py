@@ -1,5 +1,6 @@
 import os
 from dataclasses import dataclass, field
+from typing import Literal
 
 try:
     from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -16,6 +17,8 @@ if HAS_PYDANTIC_SETTINGS:
         alpaca_api_key: str = ""
         alpaca_secret_key: str = ""
         aisstream_api_key: str = ""
+
+        market_symbol: Literal["CL=F", "USO", "WTI/USD"] = "CL=F"
 
         # Phase 1: Reliability & Staleness
         max_staleness_seconds: float = 60.0
@@ -69,6 +72,8 @@ else:
         alpaca_api_key: str = field(default_factory=lambda: os.getenv("ALPACA_API_KEY", ""))
         alpaca_secret_key: str = field(default_factory=lambda: os.getenv("ALPACA_SECRET_KEY", ""))
         aisstream_api_key: str = field(default_factory=lambda: os.getenv("AISSTREAM_API_KEY", ""))
+
+        market_symbol: str = field(default_factory=lambda: os.getenv("MARKET_SYMBOL", "CL=F"))
 
         max_staleness_seconds: float = 60.0
         http_timeout_seconds: float = 4.0

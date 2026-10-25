@@ -21,9 +21,9 @@
                     <span class="text-xs font-medium uppercase tracking-wider text-slate-300">{{ freshnessStatus }}</span>
                 </div>
                 <div class="text-xs text-slate-400 border-l border-slate-800 pl-3">
-                    <span class="text-slate-200 font-bold">${{ currentPrice.toFixed(2) }}</span> 
+                    <span class="text-slate-200 font-bold">{{ currentPrice === null ? '$--.--' : '$' + currentPrice.toFixed(2) }}</span>
                     <span class="text-slate-500">({{ currentSource }})</span>
-                    <div class="text-[10px] text-slate-500">Age: {{ tickAge.toFixed(1) }}s</div>
+                    <div class="text-[10px] text-slate-500">Age: {{ tickAge === null ? '--' : tickAge.toFixed(1) }}s</div>
                 </div>
             </div>
         </header>
@@ -67,7 +67,7 @@
                         <input type="number" step="0.5" v-model.number="form.ovx_index"
                             class="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2 text-slate-100 focus:outline-none focus:border-amber-500">
                     </div>
-                    <button type="submit" :disabled="loading || isStale"
+                    <button type="submit" :disabled="loading"
                         class="w-full bg-amber-500 hover:bg-amber-400 disabled:bg-slate-800 disabled:text-slate-500 text-slate-950 font-bold py-3 rounded-xl transition shadow-lg shadow-amber-500/20">
                         {{ loading ? 'Calculating...' : (isStale ? 'REFUSED (Stale Data)' : 'Run Simulation') }}
                     </button>
@@ -82,8 +82,8 @@
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
                     </svg>
                     <div>
-                        <div class="font-bold text-sm">Data Staleness / Refusal Guard Active</div>
-                        <div class="text-xs text-rose-300 mt-0.5">{{ errorMessage || 'Price feed exceeds maximum staleness limit. Output refused.' }}</div>
+                        <div class="font-bold text-sm">{{ errorTitle }}</div>
+                        <div class="text-xs text-rose-300 mt-0.5">{{ errorMessage || 'Waiting for a verified fresh market price. Retry to check the feed.' }}</div>
                     </div>
                 </div>
 
@@ -107,6 +107,7 @@
                     </div>
                 </div>
 
+                <p v-if="result && result.history && result.history.warmup" class="text-sm text-amber-300" role="status">Price history is warming up. Volatility uses an OVX anchor and a flat-price fallback; treat these estimates as preliminary.</p>
                 <!-- Percentile Bands Table -->
                 <div class="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 shadow-xl backdrop-blur">
                     <h2 class="text-lg font-semibold text-slate-200 mb-4 border-b border-slate-800 pb-2">Percentile Price Bands</h2>
@@ -179,7 +180,7 @@
     </div>
 
     <script>
-        const { createApp, ref, computed, onMounted } = Vue;
+        const { createApp, ref, computed, onMounted, onUnmounted } = Vue;
         createApp({
             setup() {
                 const form = ref({
@@ -189,78 +190,145 @@
                     required_return: 0.20,
                     ovx_index: 32.0
                 });
-                const currentPrice = ref(75.00);
-                const currentSource = ref('initializing');
-                const tickAge = ref(0.0);
-                const serverHealth = ref('ok');
+                const currentPrice = ref(null);
+                const currentSource = ref('not connected');
+                const tickAge = ref(null);
+                const serverHealth = ref('unknown');
                 const result = ref(null);
                 const riskDrivers = ref([]);
                 const loading = ref(false);
                 const errorMessage = ref('');
+                const errorTitle = ref('Market data unavailable');
+                let timestamp = null;
+                let pollTimer, ageTimer;
+                let active = true;
                 const showWhy = ref(true);
 
-                const isStale = computed(() => serverHealth.value !== 'ok' || tickAge.value > 60.0);
+                const isStale = computed(() => serverHealth.value !== 'ok' || tickAge.value === null || tickAge.value > 60.0);
                 const freshnessColor = computed(() => isStale.value ? 'bg-rose-500' : 'bg-emerald-500');
-                const freshnessStatus = computed(() => isStale.value ? 'Stale / Refused' : 'Live & Fresh');
+                const freshnessStatus = computed(() => serverHealth.value === 'unknown' ? 'Not connected' : (isStale.value ? 'Stale / Unavailable' : 'Live & Fresh'));
 
                 function bandVal(res, bandKey, pKey) {
                     if (!res || !res.simulation[bandKey]) return '--';
                     return '$' + res.simulation[bandKey][pKey].toFixed(2);
                 }
 
+                async function requestJson(path, options = {}) {
+                    let resp;
+                    try {
+                        resp = await fetch(path, { ...options, signal: AbortSignal.timeout(30000) });
+                    } catch (err) {
+                        throw new Error('Cannot reach the API. Check the backend connection and retry.');
+                    }
+                    if (!(resp.headers.get('content-type') || '').includes('application/json')) {
+                        if (resp.status === 401 || resp.status === 403) {
+                            const error = new Error('This site requires authentication. Sign in to the site and retry, or ask the site owner to check deployment access settings.');
+                            error.status = resp.status;
+                            throw error;
+                        }
+                        if ((resp.headers.get('content-type') || '').includes('text/html')) {
+                            throw new Error('The API returned a web page instead of JSON. This host must run FastAPI or forward /api requests to the backend.');
+                        }
+                        throw new Error(`The API returned a non-JSON response (HTTP ${resp.status}). Check backend logs and retry.`);
+                    }
+                    const data = await resp.json();
+                    if (!resp.ok) {
+                        const detail = typeof data.detail === 'string' ? data.detail
+                            : Array.isArray(data.detail) ? data.detail.map(item => item.msg).join('; ')
+                            : `API request failed (HTTP ${resp.status}).`;
+                        const error = new Error(detail);
+                        error.status = resp.status;
+                        throw error;
+                    }
+                    return data;
+                }
+
+                function updateSpot(spot) {
+                    timestamp = Date.parse(spot.timestamp_utc);
+                    if (!Number.isFinite(timestamp) || !Number.isFinite(spot.price) || spot.price <= 0) {
+                        throw new Error('API returned an invalid market price.');
+                    }
+                    currentPrice.value = spot.price;
+                    currentSource.value = spot.symbol + ' / ' + spot.source;
+                    tickAge.value = Math.max(0, (Date.now() - timestamp) / 1000);
+                    serverHealth.value = 'ok';
+                    if (tickAge.value > 60.0) {
+                        const error = new Error('The latest market price is older than 60 seconds. Retry when fresh data is available.');
+                        error.status = 503;
+                        throw error;
+                    }
+                }
+
+                function showError(err) {
+                    result.value = null;
+                    riskDrivers.value = [];
+                    errorTitle.value = err.status === 401 || err.status === 403 ? 'Site access required'
+                        : err.status === 503 ? 'Fresh price required'
+                        : err.status === 409 ? 'Session closed' : 'Prediction unavailable';
+                    errorMessage.value = err.message;
+                    if (!err.status || err.status === 502 || err.status === 503) {
+                        serverHealth.value = 'unavailable';
+                    }
+                }
+
                 async function fetchPrediction() {
-                    if (isStale.value) return;
+                    if (loading.value) return;
                     loading.value = true;
                     errorMessage.value = '';
+                    result.value = null;
+                    riskDrivers.value = [];
                     try {
-                        const resp = await fetch('/predict', {
+                        const data = await requestJson('/api/predict', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify(form.value)
                         });
-                        const data = await resp.json();
-                        if (!resp.ok) {
-                            throw new Error(data.detail || 'Simulation error');
-                        }
+                        updateSpot(data.spot);
                         result.value = data;
-                        currentPrice.value = data.spot.price;
-                        currentSource.value = data.spot.source;
-                        tickAge.value = data.spot.age_seconds;
                         riskDrivers.value = data.risk_drivers || [];
                     } catch (err) {
-                        errorMessage.value = err.message;
+                        showError(err);
                     } finally {
                         loading.value = false;
                     }
                 }
 
-                onMounted(() => {
-                    fetchPrediction();
-                    try {
-                        const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-                        const ws = new WebSocket(`${proto}//${window.location.host}/ws`);
-                        ws.onmessage = (event) => {
-                            try {
-                                const msg = JSON.parse(event.data);
-                                if (msg.type === 'tick') {
-                                    currentPrice.value = msg.price;
-                                    currentSource.value = msg.source;
-                                    tickAge.value = msg.age_seconds;
-                                    serverHealth.value = msg.health;
-                                } else if (msg.type === 'error') {
-                                    errorMessage.value = msg.detail;
-                                    serverHealth.value = 'stale_or_down';
-                                }
-                            } catch (e) {}
-                        };
-                    } catch (e) {
-                        console.log("WebSockets disabled in serverless env");
+                // HTTP polling also works through serverless proxies without WebSockets.
+                async function pollQuote() {
+                    if (loading.value) {
+                        if (active) pollTimer = setTimeout(pollQuote, 15000);
+                        return;
                     }
+                    try {
+                        const data = await requestJson('/api/quote');
+                        updateSpot(data.spot);
+                    } catch (err) {
+                        showError(err);
+                    } finally {
+                        if (active) pollTimer = setTimeout(pollQuote, 15000);
+                    }
+                }
+
+                onMounted(async () => {
+                    ageTimer = setInterval(() => {
+                        if (timestamp !== null) tickAge.value = Math.max(0, (Date.now() - timestamp) / 1000);
+                        if (isStale.value) {
+                            result.value = null;
+                            riskDrivers.value = [];
+                        }
+                    }, 1000);
+                    await fetchPrediction();
+                    if (active) pollTimer = setTimeout(pollQuote, 15000);
+                });
+                onUnmounted(() => {
+                    active = false;
+                    clearTimeout(pollTimer);
+                    clearInterval(ageTimer);
                 });
 
                 return {
                     form, currentPrice, currentSource, tickAge, result, riskDrivers,
-                    loading, errorMessage, showWhy, isStale, freshnessColor, freshnessStatus,
+                    loading, errorMessage, errorTitle, showWhy, isStale, freshnessColor, freshnessStatus,
                     fetchPrediction, bandVal
                 };
             }

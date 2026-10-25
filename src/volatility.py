@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Optional
 from zoneinfo import ZoneInfo
 
@@ -147,7 +147,7 @@ class VolatilityEngine:
             microsecond=0,
         )
         if cutoff <= ref_now:
-            cutoff += timedelta(days=1)
+            return 0.0, 0
 
         rem_seconds = max(60.0, (cutoff - ref_now).total_seconds())
         rem_minutes = max(1, int(round(rem_seconds / 60.0)))

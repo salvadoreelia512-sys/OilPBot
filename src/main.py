@@ -1,18 +1,20 @@
-import os
-from datetime import datetime, timezone
-from typing import Dict, List, Optional
+import asyncio
+from pathlib import Path
+from datetime import datetime, timedelta, timezone
+from typing import Optional
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
-from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
+import pandas as pd
+from starlette.concurrency import run_in_threadpool
 
 from src.config import BotSettings
 from src.prices import AlpacaAdapter, BarRepository, FinnhubAdapter, PriceService, StaleDataError, TwelveDataAdapter, YahooFinanceAdapter
 from src.volatility import VolatilityEngine
-from src.simulation import SimulationEngine, compute_return_goal_price
-from src.news import GDELTPoller, RSSPoller, NewsRiskAdjuster, RawHeadline
-from src.ais import HormuzMonitor, BoundingBox
+from src.simulation import SimulationEngine
+from src.news import NewsRiskAdjuster
+from src.ais import HormuzMonitor
 
 app = FastAPI(
     title="Oil Probability Bot",
@@ -23,7 +25,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -48,17 +50,51 @@ hormuz_monitor = HormuzMonitor(settings=settings)
 
 
 class PredictionRequest(BaseModel):
+    model_config = {"allow_inf_nan": False}
+
     target_price: float = Field(..., gt=0.0)
     direction: str = Field(..., pattern="^(long|short)$")
     leverage: float = Field(5.0, gt=0.0)
     required_return: float = Field(0.20, ge=0.0)
     ovx_index: Optional[float] = Field(32.0, ge=0.0)
 
+    @model_validator(mode="after")
+    def validate_return_goal(self):
+        if self.direction == "short" and self.required_return >= self.leverage:
+            raise ValueError("Short return goal must require less than a 100% price decline.")
+        return self
 
+
+def fresh_tick(now_utc):
+    try:
+        return price_service.get_fresh_price(now_utc=now_utc)
+    except StaleDataError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="Price feeds unavailable. Check provider configuration and connectivity.") from exc
+
+
+def spot_payload(tick, now_utc):
+    return {
+        "symbol": tick.symbol, "price": tick.price, "source": tick.source,
+        "timestamp_utc": tick.timestamp_utc.isoformat(),
+        "age_seconds": round(tick.age_seconds(now_utc), 2),
+    }
+
+
+@app.get("/api/quote")
+@app.get("/quote")
+def quote():
+    now = datetime.now(timezone.utc)
+    tick = fresh_tick(now)
+    return {"spot": spot_payload(tick, datetime.now(timezone.utc))}
+
+
+@app.get("/api/health")
 @app.get("/health")
 def health_check():
     try:
-        report = price_service.health_report()
+        report = price_service.health_report(now_utc=datetime.now(timezone.utc))
         return {
             "status": report["status"],
             "server_time_utc": datetime.now(timezone.utc).isoformat(),
@@ -73,15 +109,14 @@ def health_check():
 @app.post("/api/predict")
 def calculate_probability(req: PredictionRequest):
     now_utc = datetime.now(timezone.utc)
-    try:
-        tick = price_service.get_fresh_price(now_utc=now_utc)
-    except StaleDataError as stale_exc:
-        raise HTTPException(status_code=503, detail=str(stale_exc))
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Price feed failure: {exc}")
+    t_years, rem_minutes = vol_engine.remaining_session_years(now_utc=now_utc)
+    if rem_minutes == 0:
+        raise HTTPException(status_code=409, detail="Today's Dubai session has ended. Predictions resume after midnight Dubai time.")
+    tick = fresh_tick(now_utc)
 
     closes = bar_repo.get_recent_closes(tick.symbol, limit=390)
-    if closes.empty or len(closes) < 5:
+    history_bars = len(closes)
+    if history_bars < 6:
         # Fallback synthetic series if bar repository is warm-up sparse
         closes = pd.Series([tick.price] * 60, index=pd.date_range(now_utc - timedelta(hours=1), periods=60, freq="1min", tz="UTC"))
 
@@ -98,8 +133,6 @@ def calculate_probability(req: PredictionRequest):
         now_utc=now_utc,
         risk_vol_multiplier=combined_vol_mult,
     )
-
-    t_years, rem_minutes = vol_engine.remaining_session_years(now_utc=now_utc)
 
     sim_res = sim_engine.run(
         spot_price=tick.price,
@@ -136,13 +169,8 @@ def calculate_probability(req: PredictionRequest):
     })
 
     return {
-        "spot": {
-            "symbol": tick.symbol,
-            "price": tick.price,
-            "source": tick.source,
-            "timestamp_utc": tick.timestamp_utc.isoformat(),
-            "age_seconds": round(tick.age_seconds(now_utc), 2),
-        },
+        "spot": spot_payload(tick, datetime.now(timezone.utc)),
+        "history": {"bars": history_bars, "warmup": history_bars < 6},
         "volatility": {
             "ewma_annual": vol_est.ewma_annual,
             "garch_annual": vol_est.garch_annual,
@@ -182,7 +210,7 @@ async def websocket_endpoint(websocket: WebSocket):
         while True:
             now_utc = datetime.now(timezone.utc)
             try:
-                tick = price_service.get_fresh_price(now_utc=now_utc)
+                tick = await run_in_threadpool(price_service.get_fresh_price, now_utc=now_utc)
                 health = price_service.health_report(now_utc=now_utc)
                 await websocket.send_json({
                     "type": "tick",
@@ -199,7 +227,6 @@ async def websocket_endpoint(websocket: WebSocket):
                     "detail": str(exc),
                     "timestamp_utc": now_utc.isoformat(),
                 })
-            import asyncio
             await asyncio.sleep(2.0)
     except WebSocketDisconnect:
         pass
@@ -207,8 +234,8 @@ async def websocket_endpoint(websocket: WebSocket):
 
 @app.get("/", response_class=HTMLResponse)
 def serve_ui():
-    html_path = os.path.join("templates", "index.html")
-    if os.path.exists(html_path):
+    html_path = Path(__file__).resolve().parent.parent / "templates" / "index.html"
+    if html_path.exists():
         with open(html_path, "r", encoding="utf-8") as f:
             return f.read()
     return "<h1>Oil Probability Bot API Running</h1><p>Visit <a href='/docs'>/docs</a> for Swagger UI.</p>"

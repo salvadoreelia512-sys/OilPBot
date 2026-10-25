@@ -1,4 +1,5 @@
 import logging
+import math
 import sqlite3
 import time
 from abc import ABC, abstractmethod
@@ -42,7 +43,7 @@ class PriceTick:
 @dataclass
 class SourceHealth:
     name: str
-    is_healthy: bool = True
+    is_healthy: bool = False
     last_success_utc: Optional[datetime] = None
     last_error: Optional[str] = None
     consecutive_failures: int = 0
@@ -279,20 +280,29 @@ class PriceService:
         Raises StaleDataError if the best tick is older than max_staleness_seconds.
         """
         ref_now = now_utc or datetime.now(timezone.utc)
-        symbol_map = symbol_map or {
-            "finnhub": "USO",
-            "twelvedata": "WTI/USD",
-            "yahoo": "CL=F",
-            "alpaca": "USO",
-        }
+        if symbol_map is None:
+            # A failover must not substitute ETF shares for futures or spot oil.
+            supported = {
+                "CL=F": {"yahoo": "CL=F"},
+                "USO": {name: "USO" for name in ("finnhub", "twelvedata", "yahoo", "alpaca")},
+                "WTI/USD": {"twelvedata": "WTI/USD"},
+            }
+            symbol_map = supported[self.settings.market_symbol]
 
         newest_candidate: Optional[PriceTick] = None
 
         for adapter in self.adapters:
-            sym = symbol_map.get(adapter.name, "CL=F")
+            if adapter.name in {"finnhub", "twelvedata", "yahoo", "alpaca"} and adapter.name not in symbol_map:
+                self.health[adapter.name].last_error = "Provider does not support the configured instrument"
+                continue
+            sym = symbol_map.get(adapter.name, self.settings.market_symbol)
             t0 = time.perf_counter()
             try:
                 tick = adapter.fetch_latest_tick(sym)
+                if not math.isfinite(tick.price) or tick.price <= 0:
+                    raise ValueError("Provider returned an invalid price")
+                if tick.timestamp_utc.tzinfo is None or (tick.timestamp_utc - ref_now).total_seconds() > 60:
+                    raise ValueError("Provider returned an invalid timestamp")
                 elapsed_ms = (time.perf_counter() - t0) * 1000.0
                 age = tick.age_seconds(ref_now)
 
@@ -318,8 +328,8 @@ class PriceService:
                 h = self.health[adapter.name]
                 h.is_healthy = False
                 h.consecutive_failures += 1
-                h.last_error = str(exc)
-                logger.warning("Adapter %s failed: %s", adapter.name, exc)
+                h.last_error = f"Provider request failed ({type(exc).__name__})"
+                logger.warning("Adapter %s failed (%s)", adapter.name, type(exc).__name__)
 
         # Check if cached tick is still within staleness threshold
         if self._last_good_tick is not None:
