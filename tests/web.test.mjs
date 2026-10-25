@@ -34,7 +34,7 @@ test('HTML response gives a deployment error and retry recovers',async()=>{
     await state.fetchPrediction();
     assert.equal(state.errorMessage.value,'');
     assert.equal(state.currentPrice.value,75);
-    assert.equal(state.freshnessStatus.value,'Live & Fresh');
+    assert.equal(state.freshnessStatus.value,'Fresh');
 });
 test('stale response clears results and permits retry',async()=>{
     let n=0;
@@ -91,4 +91,46 @@ test('HTML authentication page is reported as a site access problem',async()=>{
     assert.equal(state.errorTitle.value,'Site access required');
     assert.match(state.errorMessage.value,/Sign in/);
     assert.equal(state.result.value,null);
+});
+
+test('delayed mode labels old data and sends the selected mode',async()=>{
+    const delayedSpot={...spot,timestamp_utc:new Date(Date.now()-600000).toISOString(),freshness:'delayed'};
+    const state=ui(async(path,options)=>{
+        assert.equal(JSON.parse(options.body).data_mode,'delayed');
+        return response(200,{spot:delayedSpot,simulation:{}});
+    });
+    state.form.value.data_mode='delayed';
+    await state.fetchPrediction();
+    assert.equal(state.freshnessStatus.value,'Delayed data');
+    assert.equal(state.isStale.value,false);
+    assert.ok(state.result.value);
+    state.form.value.data_mode='strict';
+    state.resetMode();
+    assert.equal(state.result.value,null);
+    assert.equal(state.isStale.value,true);
+});
+test('quotes beyond fifteen minutes are refused even in delayed mode',async()=>{
+    const old={...spot,timestamp_utc:new Date(Date.now()-901000).toISOString()};
+    const state=ui(async()=>response(200,{spot:old,simulation:{}}));
+    state.form.value.data_mode='delayed';
+    await state.fetchPrediction();
+    assert.equal(state.result.value,null);
+    assert.equal(state.isStale.value,true);
+});
+
+test('Netlify forwards delayed quote mode to the backend',async()=>{
+    const saved=process.env.OILPBOT_API_URL;
+    const nativeFetch=globalThis.fetch;
+    try {
+        process.env.OILPBOT_API_URL='https://backend.example.com';
+        globalThis.fetch=async(url)=>{
+            assert.equal(url.href,'https://backend.example.com/api/quote?data_mode=delayed');
+            return response(200,{spot});
+        };
+        const r=await handler({path:'/api/quote',httpMethod:'GET',queryStringParameters:{data_mode:'delayed'}});
+        assert.equal(r.statusCode,200);
+    } finally {
+        if(saved===undefined) delete process.env.OILPBOT_API_URL; else process.env.OILPBOT_API_URL=saved;
+        globalThis.fetch=nativeFetch;
+    }
 });

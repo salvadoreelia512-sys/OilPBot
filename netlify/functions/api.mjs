@@ -20,7 +20,9 @@ export async function handler(event) {
         return json(503, 'OILPBOT_API_URL must be an HTTPS origin without a path or credentials.');
     }
     try {
-        const response = await fetch(new URL(path, url), {
+        const target = new URL(path, url);
+        if (event.queryStringParameters?.data_mode) target.searchParams.set('data_mode', event.queryStringParameters.data_mode);
+        const response = await fetch(target, {
             method: event.httpMethod,
             headers: { 'content-type': 'application/json' },
             body: event.httpMethod === 'POST' ? (event.isBase64Encoded ? Buffer.from(event.body || '', 'base64').toString() : event.body) : undefined,

@@ -1,7 +1,8 @@
 import asyncio
 from pathlib import Path
+from zoneinfo import ZoneInfo
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Optional, Literal
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
@@ -52,6 +53,7 @@ hormuz_monitor = HormuzMonitor(settings=settings)
 class PredictionRequest(BaseModel):
     model_config = {"allow_inf_nan": False}
 
+    data_mode: Literal["strict", "delayed"] = "strict"
     target_price: float = Field(..., gt=0.0)
     direction: str = Field(..., pattern="^(long|short)$")
     leverage: float = Field(5.0, gt=0.0)
@@ -65,29 +67,33 @@ class PredictionRequest(BaseModel):
         return self
 
 
-def fresh_tick(now_utc):
+def fresh_tick(now_utc, data_mode="strict"):
     try:
-        return price_service.get_fresh_price(now_utc=now_utc)
+        return price_service.get_fresh_price(now_utc=now_utc, data_mode=data_mode)
     except StaleDataError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=502, detail="Price feeds unavailable. Check provider configuration and connectivity.") from exc
 
 
-def spot_payload(tick, now_utc):
+def spot_payload(tick, now_utc, data_mode="strict"):
     return {
         "symbol": tick.symbol, "price": tick.price, "source": tick.source,
         "timestamp_utc": tick.timestamp_utc.isoformat(),
         "age_seconds": round(tick.age_seconds(now_utc), 2),
+        "data_mode": data_mode,
+        "freshness": "fresh" if tick.age_seconds(now_utc) <= settings.max_staleness_seconds else "delayed",
+        "max_age_seconds": settings.max_staleness_seconds if data_mode == "strict" else 900,
+        "session_cutoff_utc": now_utc.astimezone(ZoneInfo(settings.session_timezone)).replace(hour=settings.session_cutoff_hour, minute=settings.session_cutoff_minute, second=0, microsecond=0).astimezone(timezone.utc).isoformat(),
     }
 
 
 @app.get("/api/quote")
 @app.get("/quote")
-def quote():
+def quote(data_mode: Literal["strict", "delayed"] = "strict"):
     now = datetime.now(timezone.utc)
-    tick = fresh_tick(now)
-    return {"spot": spot_payload(tick, datetime.now(timezone.utc))}
+    tick = fresh_tick(now, data_mode)
+    return {"spot": spot_payload(tick, datetime.now(timezone.utc), data_mode)}
 
 
 @app.get("/api/health")
@@ -112,17 +118,20 @@ def calculate_probability(req: PredictionRequest):
     t_years, rem_minutes = vol_engine.remaining_session_years(now_utc=now_utc)
     if rem_minutes == 0:
         raise HTTPException(status_code=409, detail="Today's Dubai session has ended. Predictions resume after midnight Dubai time.")
-    tick = fresh_tick(now_utc)
+    tick = fresh_tick(now_utc, req.data_mode)
+    # Delayed estimates start at the quote, never at an invented current price.
+    t_years, rem_minutes = vol_engine.remaining_session_years(now_utc=tick.timestamp_utc)
 
     closes = bar_repo.get_recent_closes(tick.symbol, limit=390)
+    closes = closes.loc[closes.index <= tick.timestamp_utc]
     history_bars = len(closes)
     if history_bars < 6:
         # Fallback synthetic series if bar repository is warm-up sparse
-        closes = pd.Series([tick.price] * 60, index=pd.date_range(now_utc - timedelta(hours=1), periods=60, freq="1min", tz="UTC"))
+        closes = pd.Series([tick.price] * 60, index=pd.date_range(tick.timestamp_utc - timedelta(hours=1), periods=60, freq="1min", tz="UTC"))
 
     # Compute news and AIS risk adjustments
-    news_adj = news_adjuster.compute_adjustment(now_utc=now_utc)
-    ais_status = hormuz_monitor.evaluate_risk(now_utc=now_utc)
+    news_adj = news_adjuster.compute_adjustment(now_utc=tick.timestamp_utc)
+    ais_status = hormuz_monitor.evaluate_risk(now_utc=tick.timestamp_utc)
 
     combined_vol_mult = news_adj.vol_multiplier * ais_status.vol_multiplier_add
     combined_jump = news_adj.jump_intensity_annual + ais_status.jump_intensity_add
@@ -130,7 +139,7 @@ def calculate_probability(req: PredictionRequest):
     vol_est = vol_engine.estimate_volatility(
         closes_1m=closes,
         ovx_index=req.ovx_index,
-        now_utc=now_utc,
+        now_utc=tick.timestamp_utc,
         risk_vol_multiplier=combined_vol_mult,
     )
 
@@ -169,7 +178,8 @@ def calculate_probability(req: PredictionRequest):
     })
 
     return {
-        "spot": spot_payload(tick, datetime.now(timezone.utc)),
+        "spot": spot_payload(tick, datetime.now(timezone.utc), req.data_mode),
+        "prediction_basis": {"timestamp_utc": tick.timestamp_utc.isoformat(), "remaining_minutes": rem_minutes, "notice": "Estimate starts at the quoted price and time; it is not a current-price forecast."},
         "history": {"bars": history_bars, "warmup": history_bars < 6},
         "volatility": {
             "ewma_annual": vol_est.ewma_annual,

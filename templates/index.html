@@ -23,6 +23,7 @@
                 <div class="text-xs text-slate-400 border-l border-slate-800 pl-3">
                     <span class="text-slate-200 font-bold">{{ currentPrice === null ? '$--.--' : '$' + currentPrice.toFixed(2) }}</span>
                     <span class="text-slate-500">({{ currentSource }})</span>
+                    <div class="text-[10px] text-slate-500">Quote: {{ quoteTime }}</div>
                     <div class="text-[10px] text-slate-500">Age: {{ tickAge === null ? '--' : tickAge.toFixed(1) }}s</div>
                 </div>
             </div>
@@ -34,6 +35,14 @@
             <div class="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 shadow-xl backdrop-blur">
                 <h2 class="text-lg font-semibold text-slate-200 mb-4 border-b border-slate-800 pb-2">Trade Parameters</h2>
                 <form @submit.prevent="fetchPrediction" class="space-y-4">
+                    <div>
+                        <label for="data-mode" class="block text-xs text-slate-400 mb-1">Price data mode</label>
+                        <select id="data-mode" v-model="form.data_mode" @change="resetMode" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2">
+                            <option value="strict">Strict: maximum age 60 seconds</option>
+                            <option value="delayed">Delayed: maximum age 15 minutes</option>
+                        </select>
+                        <p class="text-xs text-amber-300 mt-2">Delayed estimates start at the earlier quote time, not the current market price. Data availability is not guaranteed.</p>
+                    </div>
                     <div>
                         <label class="block text-xs font-medium text-slate-400 mb-1">Target Price ($)</label>
                         <input type="number" step="0.05" v-model.number="form.target_price" required
@@ -87,6 +96,7 @@
                     </div>
                 </div>
 
+                <p v-if="result && result.spot && result.spot.freshness === 'delayed'" role="status" class="text-sm text-amber-300">Delayed estimate based on {{ new Date(result.spot.timestamp_utc).toLocaleString() }}. This is not a forecast from the current price.</p>
                 <!-- Probability & Return Goal Card -->
                 <div class="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 shadow-xl backdrop-blur grid grid-cols-1 md:grid-cols-2 gap-6">
                     <div class="border-b md:border-b-0 md:border-r border-slate-800 pb-6 md:pb-0 md:pr-6 flex flex-col justify-center items-center text-center">
@@ -94,7 +104,7 @@
                         <div class="text-5xl font-extrabold text-amber-400 tracking-tight">
                             {{ result ? (result.simulation.prob_touch_target * 100).toFixed(1) + '%' : '--%' }}
                         </div>
-                        <span class="text-xs text-slate-500 mt-2">Before today's Dubai session cutoff</span>
+                        <span class="text-xs text-slate-500 mt-2">From the quoted time to today's Dubai session cutoff</span>
                     </div>
                     <div class="flex flex-col justify-center items-center text-center">
                         <span class="text-xs font-medium uppercase tracking-wider text-slate-400 mb-2">Nearest Return Goal Level</span>
@@ -188,11 +198,15 @@
                     direction: 'long',
                     leverage: 5,
                     required_return: 0.20,
-                    ovx_index: 32.0
+                    ovx_index: 32.0,
+                    data_mode: 'strict'
                 });
                 const currentPrice = ref(null);
                 const currentSource = ref('not connected');
                 const tickAge = ref(null);
+                const quoteTime = ref('--');
+                let sessionCutoff = null;
+                const maxAge = computed(() => form.value.data_mode === 'delayed' ? 900 : 60);
                 const serverHealth = ref('unknown');
                 const result = ref(null);
                 const riskDrivers = ref([]);
@@ -202,11 +216,12 @@
                 let timestamp = null;
                 let pollTimer, ageTimer;
                 let active = true;
+                let generation = 0;
                 const showWhy = ref(true);
 
-                const isStale = computed(() => serverHealth.value !== 'ok' || tickAge.value === null || tickAge.value > 60.0);
-                const freshnessColor = computed(() => isStale.value ? 'bg-rose-500' : 'bg-emerald-500');
-                const freshnessStatus = computed(() => serverHealth.value === 'unknown' ? 'Not connected' : (isStale.value ? 'Stale / Unavailable' : 'Live & Fresh'));
+                const isStale = computed(() => serverHealth.value !== 'ok' || tickAge.value === null || tickAge.value > maxAge.value || (sessionCutoff !== null && Date.now() >= sessionCutoff));
+                const freshnessColor = computed(() => isStale.value ? 'bg-rose-500' : (tickAge.value > 60 ? 'bg-amber-500' : 'bg-emerald-500'));
+                const freshnessStatus = computed(() => serverHealth.value === 'unknown' ? 'Not connected' : (isStale.value ? 'Stale / Unavailable' : (tickAge.value > 60 ? 'Delayed data' : 'Fresh')));
 
                 function bandVal(res, bandKey, pKey) {
                     if (!res || !res.simulation[bandKey]) return '--';
@@ -245,6 +260,8 @@
 
                 function updateSpot(spot) {
                     timestamp = Date.parse(spot.timestamp_utc);
+                    sessionCutoff = spot.session_cutoff_utc ? Date.parse(spot.session_cutoff_utc) : null;
+                    quoteTime.value = new Date(timestamp).toLocaleString();
                     if (!Number.isFinite(timestamp) || !Number.isFinite(spot.price) || spot.price <= 0) {
                         throw new Error('API returned an invalid market price.');
                     }
@@ -252,8 +269,8 @@
                     currentSource.value = spot.symbol + ' / ' + spot.source;
                     tickAge.value = Math.max(0, (Date.now() - timestamp) / 1000);
                     serverHealth.value = 'ok';
-                    if (tickAge.value > 60.0) {
-                        const error = new Error('The latest market price is older than 60 seconds. Retry when fresh data is available.');
+                    if (tickAge.value > maxAge.value || (sessionCutoff !== null && Date.now() >= sessionCutoff)) {
+                        const error = new Error('The quote is outside the selected age limit or active session. Retry when usable data is available.');
                         error.status = 503;
                         throw error;
                     }
@@ -271,8 +288,18 @@
                     }
                 }
 
+                function resetMode() {
+                    generation++;
+                    result.value = null;
+                    riskDrivers.value = [];
+                    serverHealth.value = 'unknown';
+                    errorMessage.value = '';
+                }
+
                 async function fetchPrediction() {
                     if (loading.value) return;
+                    const requestGeneration = generation;
+                    const requestedMode = form.value.data_mode;
                     loading.value = true;
                     errorMessage.value = '';
                     result.value = null;
@@ -283,11 +310,12 @@
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify(form.value)
                         });
+                        if (requestGeneration !== generation || requestedMode !== form.value.data_mode) return;
                         updateSpot(data.spot);
                         result.value = data;
                         riskDrivers.value = data.risk_drivers || [];
                     } catch (err) {
-                        showError(err);
+                        if (requestGeneration === generation) showError(err);
                     } finally {
                         loading.value = false;
                     }
@@ -299,11 +327,14 @@
                         if (active) pollTimer = setTimeout(pollQuote, 15000);
                         return;
                     }
+                    const pollGeneration = generation;
                     try {
-                        const data = await requestJson('/api/quote');
+                        const data = await requestJson('/api/quote?data_mode=' + form.value.data_mode);
+                        if (pollGeneration !== generation || loading.value) return;
                         updateSpot(data.spot);
+                        if (errorTitle.value === 'Fresh price required' || errorTitle.value === 'Prediction unavailable') errorMessage.value = '';
                     } catch (err) {
-                        showError(err);
+                        if (pollGeneration === generation && !loading.value) showError(err);
                     } finally {
                         if (active) pollTimer = setTimeout(pollQuote, 15000);
                     }
@@ -312,7 +343,7 @@
                 onMounted(async () => {
                     ageTimer = setInterval(() => {
                         if (timestamp !== null) tickAge.value = Math.max(0, (Date.now() - timestamp) / 1000);
-                        if (isStale.value) {
+                        if (isStale.value || (result.value && (Date.now() - Date.parse(result.value.spot.timestamp_utc)) / 1000 > maxAge.value)) {
                             result.value = null;
                             riskDrivers.value = [];
                         }
@@ -327,7 +358,7 @@
                 });
 
                 return {
-                    form, currentPrice, currentSource, tickAge, result, riskDrivers,
+                    form, currentPrice, currentSource, tickAge, quoteTime, resetMode, result, riskDrivers,
                     loading, errorMessage, errorTitle, showWhy, isStale, freshnessColor, freshnessStatus,
                     fetchPrediction, bandVal
                 };

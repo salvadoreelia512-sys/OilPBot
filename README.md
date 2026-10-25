@@ -162,7 +162,7 @@ API destinations are `finnhub.io`, `api.twelvedata.com`, and `data.alpaca.market
 
 The app starts disconnected, displays no invented price, and ages the last verified tick
 locally. Closed markets, delayed quotes, missing keys, and provider outages can all prevent
-a fresh quote. Prices older than 60 seconds are refused; the UI allows retries after a
+a fresh quote. In strict mode, prices older than 60 seconds are refused; the UI allows retries after a
 failure. No sample data is substituted for a live price. Sparse history is explicitly
 marked as warmup: the volatility engine uses a flat-price series with an OVX anchor.
 Predictions after today's 23:30 Dubai cutoff return a session-closed response rather than
@@ -185,3 +185,24 @@ with controlled feeds, including empty history, invalid inputs, stale/down feed 
 instrument consistency, and session cutoff. Node's built-in test runner (Node 20+)
 checks frontend state/error handling and the Netlify proxy. Controlled-feed tests are
 not evidence of live market access or a successful production deployment.
+
+## Optional delayed-data mode
+
+Select **Price data mode → Delayed: maximum age 15 minutes** in the trade form.
+Strict mode remains the default (60 seconds). The API accepts `data_mode: "delayed"`
+in prediction JSON and `/api/quote?data_mode=delayed` for quotes. Both modes require
+quotes from the current Dubai calendar session before its 23:30 cutoff. A quote
+from the previous session is refused even if it is less than 15 minutes old.
+
+A delayed probability starts at the actual earlier quote timestamp and runs to
+that day's cutoff. It is not a probability conditional on the current market price.
+The UI displays the timestamp, continuously updates age, uses an amber delayed
+label, and clears results when their underlying quote expires. History and risk
+inputs are filtered/evaluated at the quote time to avoid using later observations.
+
+Provider responses are cached for 30 seconds across requests. Failures trigger
+30-second exponential backoff, capped at five minutes, rather than rapid retries
+from each browser tab. `/api/health` includes safe Yahoo diagnostics and retry time;
+a usable delayed quote reports `status: "delayed"`. This reduces traffic but cannot
+remove upstream rate limits or supply prices while markets are closed. There is
+no automatic switch to delayed mode and no synthetic live-price substitution.

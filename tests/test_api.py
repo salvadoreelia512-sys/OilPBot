@@ -124,3 +124,78 @@ def test_invalid_provider_data_refused(tmp_path,price,timestamp):
     service=PriceService([InvalidFeed()],BotSettings(sqlite_db_path=str(tmp_path/'invalid.db')))
     with pytest.raises(AllSourcesDownError):
         service.get_fresh_price(now_utc=FixedClock.now(timezone.utc))
+
+
+def test_delayed_mode_uses_quote_time_and_strict_refuses(client, monkeypatch):
+    now = FixedClock.now(timezone.utc)
+    class DelayedFeed(Feed):
+        def fetch_latest_tick(self, symbol):
+            return PriceTick(symbol, 75, now - timedelta(minutes=10), self.name)
+    main.price_service.adapters = [DelayedFeed()]
+    strict = client.post('/api/predict', json={'target_price':78,'direction':'long'})
+    assert strict.status_code == 503
+    r = client.post('/api/predict', json={'target_price':78,'direction':'long','data_mode':'delayed'})
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data['spot']['freshness'] == 'delayed'
+    assert data['spot']['max_age_seconds'] == 900
+    assert data['prediction_basis']['timestamp_utc'] == (now-timedelta(minutes=10)).isoformat()
+    assert data['prediction_basis']['remaining_minutes'] == main.vol_engine.remaining_session_years(now-timedelta(minutes=10))[1]
+    assert client.get('/api/quote?data_mode=delayed').status_code == 200
+    assert client.get('/api/quote?data_mode=unknown').status_code == 422
+
+
+@pytest.mark.parametrize('offset,accepted', [(60, True),(61, True),(900, True),(901,False),(86400,False)])
+def test_delayed_age_boundaries(tmp_path,offset,accepted):
+    now = FixedClock.now(timezone.utc)
+    service=PriceService([],BotSettings(sqlite_db_path=str(tmp_path/'boundaries.db')))
+    tick=PriceTick('CL=F',75,now-timedelta(seconds=offset),'fixture')
+    if accepted:
+        assert service.validate_tick(tick,now,'delayed') == tick
+    else:
+        with pytest.raises(StaleDataError):
+            service.validate_tick(tick,now,'delayed')
+
+
+def test_previous_dubai_day_refused_even_if_under_fifteen_minutes(tmp_path):
+    now=datetime(2026,10,21,20,5,tzinfo=timezone.utc)  # 00:05 Dubai
+    tick=PriceTick('CL=F',75,now-timedelta(minutes=10),'fixture')
+    service=PriceService([],BotSettings(sqlite_db_path=str(tmp_path/'day.db')))
+    with pytest.raises(StaleDataError,match='session'):
+        service.validate_tick(tick,now,'delayed')
+
+
+def test_backoff_and_recovery(tmp_path,monkeypatch):
+    import src.prices as prices
+    clock=[1000.0]
+    monkeypatch.setattr(prices.time,'monotonic',lambda:clock[0])
+    calls=[]
+    class Recovering(Feed):
+        def fetch_latest_tick(self,symbol):
+            calls.append(symbol)
+            if len(calls)==1: raise ConnectionError('offline')
+            return super().fetch_latest_tick(symbol)
+    service=PriceService([Recovering()],BotSettings(sqlite_db_path=str(tmp_path/'retry.db')))
+    now=FixedClock.now(timezone.utc)
+    for _ in range(2):
+        with pytest.raises(AllSourcesDownError): service.get_fresh_price(now_utc=now)
+    assert len(calls)==1
+    clock[0]+=31
+    assert service.get_fresh_price(now_utc=now).price==75
+    assert len(calls)==2
+    service.get_fresh_price(now_utc=now)
+    assert len(calls)==2
+
+
+def test_yahoo_diagnostics(tmp_path,monkeypatch):
+    import src.prices as prices
+    class RateLimitError(Exception): pass
+    class Ticker:
+        def history(self,**kwargs): raise RateLimitError('429 with private detail')
+    monkeypatch.setattr(prices.yf,'Ticker',lambda symbol:Ticker())
+    service=PriceService([prices.YahooFinanceAdapter()],BotSettings(sqlite_db_path=str(tmp_path/'yahoo.db')))
+    with pytest.raises(AllSourcesDownError): service.get_fresh_price(now_utc=FixedClock.now(timezone.utc))
+    health=service.health_report(FixedClock.now(timezone.utc))['sources']['yahoo']
+    assert 'rate limited' in health['last_error']
+    assert 'private' not in health['last_error']
+    assert health['retry_after_seconds']>0

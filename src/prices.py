@@ -2,6 +2,8 @@ import logging
 import math
 import sqlite3
 import time
+import threading
+from zoneinfo import ZoneInfo
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -134,9 +136,17 @@ class YahooFinanceAdapter(PriceAdapter):
         if yf is None:
             raise RuntimeError("yfinance package is not installed")
         ticker = yf.Ticker(symbol)
-        hist = ticker.history(period="1d", interval="1m")
+        try:
+            hist = ticker.history(period="1d", interval="1m", timeout=4, raise_errors=True)
+        except Exception as exc:
+            name = type(exc).__name__
+            if "RateLimit" in name or "429" in str(exc):
+                raise RuntimeError("Yahoo rate limited requests; waiting before retry") from exc
+            if "Timeout" in name or "Connection" in name:
+                raise ConnectionError("Yahoo connection failed or timed out") from exc
+            raise ValueError("Yahoo returned no usable minute bars (market closed or data unavailable)") from exc
         if hist.empty:
-            raise ValueError(f"Yahoo Finance returned empty 1m bars for {symbol}")
+            raise ValueError("Yahoo returned no usable minute bars (market closed or data unavailable)")
         last_row = hist.iloc[-1]
         last_ts = hist.index[-1].to_pydatetime()
         if last_ts.tzinfo is None:
@@ -269,16 +279,36 @@ class PriceService:
             a.name: SourceHealth(name=a.name) for a in adapters
         }
         self._last_good_tick: Optional[PriceTick] = None
+        self._attempt_after = {}
+        self._provider_cache = {}
+        self._lock = threading.Lock()
 
-    def get_fresh_price(
+    def validate_tick(self, tick, now_utc, data_mode="strict"):
+        if data_mode not in {"strict", "delayed"}:
+            raise ValueError("Unknown data mode")
+        limit = self.settings.max_staleness_seconds if data_mode == "strict" else 900.0
+        local_now = now_utc.astimezone(ZoneInfo(self.settings.session_timezone))
+        local_tick = tick.timestamp_utc.astimezone(ZoneInfo(self.settings.session_timezone))
+        cutoff = local_now.replace(hour=self.settings.session_cutoff_hour,
+                                   minute=self.settings.session_cutoff_minute, second=0, microsecond=0)
+        if local_now >= cutoff or local_tick.date() != local_now.date():
+            raise StaleDataError("REFUSED: Quote is outside today's active Dubai session.")
+        if tick.age_seconds(now_utc) > limit:
+            raise StaleDataError(f"REFUSED: Quote is older than the {limit:g}-second {data_mode} limit.")
+        return tick
+
+    def get_fresh_price(self, symbol_map=None, now_utc=None, data_mode="strict"):
+        # Serialize refreshes so concurrent tabs do not multiply provider traffic.
+        with self._lock:
+            return self._get_price(symbol_map, now_utc, data_mode)
+
+    def _get_price(
         self,
         symbol_map: Optional[Dict[str, str]] = None,
         now_utc: Optional[datetime] = None,
+        data_mode: str = "strict",
     ) -> PriceTick:
-        """
-        Walks the adapter chain until a fresh, non-stale tick is found.
-        Raises StaleDataError if the best tick is older than max_staleness_seconds.
-        """
+        """Refresh compatible providers and apply the requested age/session policy."""
         ref_now = now_utc or datetime.now(timezone.utc)
         if symbol_map is None:
             # A failover must not substitute ETF shares for futures or spot oil.
@@ -298,7 +328,22 @@ class PriceService:
             sym = symbol_map.get(adapter.name, self.settings.market_symbol)
             t0 = time.perf_counter()
             try:
-                tick = adapter.fetch_latest_tick(sym)
+                key = (adapter.name, sym)
+                fetched = False
+                if time.monotonic() < self._attempt_after.get(key, 0):
+                    tick = self._provider_cache.get(key)
+                    if tick is None:
+                        continue
+                else:
+                    try:
+                        tick = adapter.fetch_latest_tick(sym)
+                        fetched = True
+                    except Exception:
+                        failures = self.health[adapter.name].consecutive_failures
+                        self._attempt_after[key] = time.monotonic() + min(300, 30 * 2 ** min(failures, 4))
+                        raise
+                    self._provider_cache[key] = tick
+                    self._attempt_after[key] = time.monotonic() + 30
                 if not math.isfinite(tick.price) or tick.price <= 0:
                     raise ValueError("Provider returned an invalid price")
                 if tick.timestamp_utc.tzinfo is None or (tick.timestamp_utc - ref_now).total_seconds() > 60:
@@ -309,42 +354,51 @@ class PriceService:
                 # Update source health
                 h = self.health[adapter.name]
                 h.latency_ms = elapsed_ms
-                h.last_success_utc = ref_now
+                if fetched:
+                    h.last_success_utc = ref_now
 
-                if age <= self.settings.max_staleness_seconds:
+                try:
+                    self.validate_tick(tick, ref_now, data_mode)
+                    acceptable = True
+                except StaleDataError as exc:
+                    h.last_error = str(exc)
+                    acceptable = False
+                if acceptable:
                     h.is_healthy = True
-                    h.consecutive_failures = 0
-                    h.last_error = None
+                    if fetched:
+                        h.consecutive_failures = 0
+                        h.last_error = None
                     self._last_good_tick = tick
                     self.bar_repo.record_tick_as_bar(tick)
                     return tick
                 else:
                     h.is_healthy = False
-                    h.last_error = f"Stale tick (age={age:.1f}s > {self.settings.max_staleness_seconds}s)"
                     if newest_candidate is None or tick.timestamp_utc > newest_candidate.timestamp_utc:
                         newest_candidate = tick
 
             except Exception as exc:
                 h = self.health[adapter.name]
                 h.is_healthy = False
+                h.latency_ms = (time.perf_counter() - t0) * 1000.0
                 h.consecutive_failures += 1
-                h.last_error = f"Provider request failed ({type(exc).__name__})"
+                if adapter.name == "yahoo" and isinstance(exc, (ValueError, RuntimeError, ConnectionError)):
+                    h.last_error = str(exc) if str(exc).startswith("Yahoo ") else f"Provider request failed ({type(exc).__name__})"
+                else:
+                    h.last_error = f"Provider request failed ({type(exc).__name__})"
                 logger.warning("Adapter %s failed (%s)", adapter.name, type(exc).__name__)
 
         # Check if cached tick is still within staleness threshold
         if self._last_good_tick is not None:
-            cached_age = self._last_good_tick.age_seconds(ref_now)
-            if cached_age <= self.settings.max_staleness_seconds:
-                return self._last_good_tick
+            try:
+                return self.validate_tick(self._last_good_tick, ref_now, data_mode)
+            except StaleDataError:
+                pass
             if newest_candidate is None or self._last_good_tick.timestamp_utc > newest_candidate.timestamp_utc:
                 newest_candidate = self._last_good_tick
 
         if newest_candidate is not None:
-            age = newest_candidate.age_seconds(ref_now)
-            raise StaleDataError(
-                f"REFUSED: Freshest price from '{newest_candidate.source}' is {age:.1f}s old "
-                f"(limit={self.settings.max_staleness_seconds}s)."
-            )
+            self.validate_tick(newest_candidate, ref_now, data_mode)
+            return newest_candidate
 
         raise AllSourcesDownError("REFUSED: All price sources failed and no cached tick is available.")
 
@@ -355,12 +409,15 @@ class PriceService:
             if self._last_good_tick
             else None
         )
+        status = "stale_or_down"
+        if self._last_good_tick:
+            try:
+                self.validate_tick(self._last_good_tick, ref_now, "delayed")
+                status = "ok" if last_age <= self.settings.max_staleness_seconds else "delayed"
+            except StaleDataError:
+                pass
         return {
-            "status": (
-                "ok"
-                if (last_age is not None and last_age <= self.settings.max_staleness_seconds)
-                else "stale_or_down"
-            ),
+            "status": status,
             "last_good_tick": self._last_good_tick,
             "last_tick_age_seconds": last_age,
             "sources": {
@@ -369,6 +426,7 @@ class PriceService:
                     "consecutive_failures": h.consecutive_failures,
                     "latency_ms": round(h.latency_ms, 2),
                     "last_error": h.last_error,
+                    "retry_after_seconds": round(max(0, self._attempt_after.get((name, self.settings.market_symbol), 0) - time.monotonic()), 1),
                 }
                 for name, h in self.health.items()
             },
