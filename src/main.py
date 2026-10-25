@@ -69,6 +69,7 @@ def health_check():
         return {"status": "error", "error": str(exc), "server_time_utc": datetime.now(timezone.utc).isoformat()}
 
 
+@app.post("/predict")
 @app.post("/api/predict")
 def calculate_probability(req: PredictionRequest):
     now_utc = datetime.now(timezone.utc)
