@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional, Literal
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 from pydantic import BaseModel, Field, model_validator
 import pandas as pd
 from starlette.concurrency import run_in_threadpool
@@ -257,3 +257,10 @@ def serve_ui():
 @app.get("/app.js")
 def frontend_script():
     return FileResponse(Path(__file__).resolve().parent.parent / "templates" / "app.js", media_type="text/javascript")
+
+
+from src.storage import StorageUnavailable
+
+@app.exception_handler(StorageUnavailable)
+async def storage_unavailable_handler(request, exc):
+    return JSONResponse(status_code=503, content={"detail": "Persistent database unavailable. Check DATABASE_URL and database connectivity in Render."})

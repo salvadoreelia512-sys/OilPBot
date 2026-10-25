@@ -63,12 +63,8 @@ def news_context(now):
 
 
 def history(snapshot):
-    with sqlite3.connect(BotSettings().sqlite_db_path, timeout=10) as db:
-        db.execute('CREATE TABLE IF NOT EXISTS tvc_observations (ts REAL PRIMARY KEY, price REAL NOT NULL)')
-        db.execute('INSERT OR IGNORE INTO tvc_observations VALUES (?,?)',(snapshot.timestamp.timestamp(),snapshot.price))
-        db.execute('DELETE FROM tvc_observations WHERE ts < ?',(snapshot.timestamp.timestamp()-90*86400,))
-        rows=db.execute('SELECT ts,price FROM tvc_observations WHERE ts<=? ORDER BY ts DESC LIMIT 1000',(snapshot.timestamp.timestamp(),)).fetchall()[::-1]
-    return rows
+    from src.storage import record_quote
+    return record_quote(snapshot)
 
 
 def enhance(result, snapshot, request, now, context=None, observations=None):

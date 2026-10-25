@@ -120,3 +120,36 @@ price effect is claimed. The news adjustment has not passed an out-of-sample gat
 existing calibration harnesses remain available for future validation. Live inventory
 surprises, USD/rates, positioning, term structure, AIS and holiday schedules remain
 unmodeled. A percentile line is not a worst/best possible bound or a coherent path.
+
+## Persistent Neon PostgreSQL
+
+Set `DATABASE_URL` securely in Render to the Neon **pooled** PostgreSQL connection
+string, keeping the supplied SSL settings. Do not commit the value. No extra app
+hosting service is needed. The application automatically creates its own tables:
+
+- `tvc_observations`: distinct timestamped TVC quote observations.
+- `oil_news`: dated headlines associated with served forecasts, deduplicated.
+- `oil_forecasts`: model version, quote, target, direction, compact model/evidence record.
+- `oil_outcomes`: six horizon probabilities, due dates, observation-based outcomes.
+
+With DATABASE_URL present there is no silent SQLite fallback. Without it, local
+SQLite remains available for development. Legacy model/bar APIs still use SQLite;
+the main TVC history, forecast, news archive and statistics use the selected backend.
+Existing observations already in the chosen SQLite database are retained locally;
+they are not automatically copied to Neon. Data lost by earlier Render redeployments
+cannot be recovered by adding Neon.
+
+`GET /api/statistics` verifies the selected backend and reports record counts and
+matured outcome statuses. It never displays the connection string or credentials.
+Statistics evaluations are batched (up to 100 due outcomes per request). A recorded
+target crossing counts as an observed touch. A sampled miss requires no scheduled
+trading gaps exceeding five minutes; larger gaps are marked insufficient coverage.
+Even dense point samples may miss brief intraminute touches. The observation-based
+Brier diagnostics are therefore not validated continuous-touch calibration, and
+correlated overlapping forecasts must not be interpreted as independent experiments.
+
+Neon makes new stored records survive Render redeployments. It does not stop Render
+free instances sleeping, backfill historical data, or provide uninterrupted collection.
+Records are retained without automatic age deletion; monitor Neon free-tier storage
+and export/back up or archive records before reaching its limits. Never share a
+PostgreSQL URL in chat, logs, screenshots or source control.

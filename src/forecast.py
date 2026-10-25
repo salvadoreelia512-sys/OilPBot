@@ -121,8 +121,6 @@ class OilFeed:
                     snapshot = parse_snapshot(response.text)
                     if (snapshot.timestamp - datetime.now(timezone.utc)).total_seconds() > 60:
                         raise ValueError("Source timestamp is in the future")
-                    from src.intelligence import history
-                    history(snapshot)
                     self.snapshot = snapshot
                     self.failures = 0
                     self.last_error = None
@@ -133,6 +131,8 @@ class OilFeed:
                     self.last_error = "Oil source rate limited requests" if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 429 else "Oil source unavailable or quote format changed"
             if self.snapshot is None:
                 raise HTTPException(status_code=503, detail=self.last_error or "Oil quote is not available yet. Retry shortly.")
+            from src.intelligence import history
+            history(self.snapshot)
             return self.snapshot
 
 
@@ -221,4 +221,16 @@ def forecast(request: ForecastRequest):
     snapshot = feed.get()
     from src.intelligence import enhance
     now = datetime.now(timezone.utc)
-    return enhance(estimate(snapshot, request, now), snapshot, request, now)
+    result = enhance(estimate(snapshot, request, now), snapshot, request, now)
+    from src.storage import save_forecast
+    result['forecast_id'] = save_forecast(result, now)
+    return result
+
+
+@router.get("/api/statistics")
+def statistics_endpoint():
+    from src.storage import statistics
+    try:
+        return statistics()
+    except Exception:
+        raise HTTPException(status_code=503, detail="Database unavailable. Check DATABASE_URL and database connectivity in Render; credentials are never displayed.")
