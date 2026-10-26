@@ -8,6 +8,15 @@ import pytest
 from src import strategic
 
 
+@pytest.fixture(autouse=True)
+def bundled_archive_fixture(tmp_path, monkeypatch, request):
+    # Local runtime refreshes must not change the frozen validation test fixture.
+    monkeypatch.setattr(strategic, 'CACHE_PATH', tmp_path/'runtime.json')
+    monkeypatch.setattr(strategic, 'CACHE_REPORT', tmp_path/'runtime-report.json')
+    if request.node.name != 'test_refresh_is_atomic_and_cannot_promote_an_unreviewed_model':
+        monkeypatch.setattr(strategic, 'refresh_if_needed', lambda *args: None)
+
+
 def test_sources_and_validation_fingerprint_are_consistent():
     data=strategic.load_data();report=strategic.load_validation()
     assert len(data['bars'])>=4000
