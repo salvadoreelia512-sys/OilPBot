@@ -22,7 +22,7 @@ function clearResults() {
     $('projection-chart').innerHTML = '<p class="muted">Your projected range will appear here.</p>';
     $('summary').textContent = '';
     $('closed-note').hidden = true;
-    $('outlook').textContent='';$('evidence').textContent='';$('news').replaceChildren();
+    $('outlook').textContent='';$('evidence').textContent='';
 }
 function showQuote(value) {
     if (!Number.isFinite(value.price) || !Number.isFinite(Date.parse(value.timestamp_utc))) throw new Error('The source returned an invalid quote.');
@@ -89,14 +89,8 @@ function render(data) {
         const o=data.outlook;
         $('outlook').textContent=`Recommended action: ${o.action.toUpperCase()}${o.target_price?' · '+o.horizon+' · target $'+fmt(o.target_price):''} · ${o.leverage}× reference. ${o.reason}${o.conditional_setups?' Watch only: '+o.conditional_setups.map(s=>s.direction.toUpperCase()+' trigger $'+fmt(s.trigger)+' → target $'+fmt(s.target)).join('; ')+'. '+o.setup_notice:''}`;
         const e=data.evidence;
-        $('evidence').textContent=`${e.observations} observed quotes · ${e.news.coverage}/2 news feeds available · ${e.news.headlines.length} recent relevant headlines. ${e.news.sources.map(s=>s.name+': '+(s.available?'reachable':'unavailable')).join(' · ')}. ${e.validation} ${e.unmodeled}${data.historical_context?' Historical context: '+Object.entries(data.historical_context.series).map(([k,v])=>k+' '+v.count+' daily observations ('+v.first+' to '+v.last+')').join('; ')+'. Daily validation MSE '+data.historical_context.validation.model_mse.toFixed(6)+' versus baseline '+data.historical_context.validation.zero_drift_mse.toFixed(6)+'. Historical directional model NOT promoted.':''}`;
-        $('news').replaceChildren();
-        for(const h of e.news.headlines){
-            const a=document.createElement('a');
-            if(!/^https?:\/\//i.test(h.url))continue;
-            a.href=h.url;a.textContent=h.title;a.target='_blank';a.rel='noopener noreferrer';
-            const p=document.createElement('p');p.append(a);$('news').append(p);
-        }
+        $('evidence').textContent=`${e.observations} observed quotes · ${e.news.coverage}/2 news feeds available · ${e.news.headlines.length} dated oil headlines. ${e.news.sources.map(s=>s.name+': '+(s.available?'reachable':'unavailable')).join(' · ')}. ${e.validation} ${e.unmodeled}${data.historical_context?' Historical context: '+Object.entries(data.historical_context.series).map(([k,v])=>k+' '+v.count+' daily observations ('+v.first+' to '+v.last+')').join('; ')+'. Daily validation MSE '+data.historical_context.validation.model_mse.toFixed(6)+' versus baseline '+data.historical_context.validation.zero_drift_mse.toFixed(6)+'. Historical directional model NOT promoted.':''}`;
+
     }
     $('closed-note').hidden = data.quote.market_open;
     $('closed-note').textContent = 'The market is closed. Horizons with no scheduled trading have no modeled movement. The quote above is the last session price.';
@@ -136,4 +130,28 @@ setInterval(()=>{
     if(result && Date.now()-Date.parse(result.model.as_of_utc)>180000) clearResults();
     if(quote && quote.market_open && Date.now()-Date.parse(quote.timestamp_utc)>900000){$('status').textContent='Quote too old · waiting for an update';clearResults();}
 },1000);
+function renderNews(data) {
+    const available = data.sources.filter(s=>s.available).length;
+    const checked = data.checked_at_utc ? new Date(data.checked_at_utc).toLocaleString() : 'unknown';
+    $('news-status').textContent = `${available}/${data.sources.length} feeds reachable · Checked ${checked}. ` + data.sources.map(s=>s.name+': '+(s.available?'reachable':'unavailable')).join(' · ');
+    $('news').replaceChildren();
+    if(!data.headlines.length) {
+        const p=document.createElement('p');
+        p.textContent=available ? 'No matching oil headlines published in the last seven days.' : 'News sources unavailable. Retrying automatically.';
+        $('news').append(p);
+    }
+    for(const h of data.headlines) {
+        if(!/^https?:\/\//i.test(h.url)) continue;
+        const p=document.createElement('p'), a=document.createElement('a'), meta=document.createElement('small');
+        a.href=h.url;a.textContent=h.title;a.target='_blank';a.rel='noopener noreferrer';
+        meta.textContent=` · ${h.source} · ${new Date(h.published_utc).toLocaleString()}${h.used_for_risk?'':' · Background context'}`;
+        p.append(a,meta);$('news').append(p);
+    }
+}
+async function refreshNews() {
+    try { renderNews(await api('/api/news')); }
+    catch(error) { $('news-status').textContent='News refresh failed · previous articles may be outdated. '+error.message; }
+    finally { setTimeout(refreshNews,60000); }
+}
+refreshNews();
 refreshQuote();

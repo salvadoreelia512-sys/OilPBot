@@ -218,6 +218,13 @@ def market(response: Response):
             "source_warning": feed.last_error}
 
 
+@router.get("/api/news")
+def news(response: Response):
+    from src.intelligence import news_context
+    response.headers["Cache-Control"] = "no-store"
+    return news_context(datetime.now(timezone.utc))
+
+
 @router.post("/api/forecast")
 def forecast(request: ForecastRequest):
     snapshot = feed.get()

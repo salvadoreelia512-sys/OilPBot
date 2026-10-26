@@ -10,7 +10,12 @@ There are no user inputs for OVX, required return, or data mode.
 
 ## Data and model
 
-- The main app uses the exact **TVC:USOIL** instrument's public TradingView snapshot:
+- The main price display embeds TradingView's official free Single Ticker widget for
+  **TVC:USOIL**, receiving provider updates directly in the visitor's browser. No API
+  key is needed. Provider availability, market hours, entitlements and delays still
+  apply; zero-latency or tick-for-tick delivery is not guaranteed. The widget is a
+  display, not a backend quote API.
+- Forecast calculations separately use the exact **TVC:USOIL** public snapshot:
   https://www.tradingview.com/symbols/TVC-USOIL/ . This is not Nasdaq's oil futures
   listing or a Nasdaq-listed security. The interface credits the actual source and
   shows its timestamp. It never substitutes USO ETF or futures prices silently.
@@ -53,7 +58,11 @@ python -m venv .venv
 Open the host running the app on port 8000. The same FastAPI service serves the HTML,
 JavaScript, charts and API. No API key or environment-variable setup is needed for the
 main TVC app. SQLite needs a writable path; `SQLITE_DB_PATH` optionally changes it.
-The frontend has no external JavaScript, CSS, chart or font dependencies.
+The forecast UI has no external chart, CSS or font dependencies. The price widget
+loads TradingView's official external script and iframe; ad blockers, CSP or network
+policies can block it. A source link remains available if it fails. Backend snapshots
+may lag the widget; the separate forecast reference quote shows the exact timestamp
+used for calculations. The widget does not make stale backend data current.
 
 ## Deploy on Render
 
@@ -70,6 +79,8 @@ in Netlify to the backend HTTPS origin. The Node function forwards `/api/market`
 
 ## Main API
 
+- `GET /api/news`: independently refreshed, dated oil news and per-source availability.
+  News remains visible even when quotes or forecasts are unavailable.
 - `GET /api/market`: timestamped TVC:USOIL quote, automatic freshness/closure status.
 - `POST /api/forecast`: `{ "target_price": 105, "direction": "long", "leverage": 5 }`.
   Returns six horizon estimates, projection points, model assumptions, underlying
@@ -101,8 +112,13 @@ with common random numbers across requests, Brownian-bridge barrier corrections
 cumulative touch probabilities at longer horizons are expected, not instability.
 The reported sampling margin describes Monte Carlo noise, not forecast accuracy.
 
-BBC World and EIA Today in Energy RSS are fetched without keys, cached for ten
-minutes, filtered for oil-relevant dated articles, clustered, scored and decayed.
+BBC World and EIA Today in Energy RSS are fetched without keys, cached for one
+minute, filtered for oil-relevant dated articles, clustered, scored and decayed.
+Failed feeds retry after 15 seconds on the next request. The browser requests news
+every minute, independently of forecasting. Articles up to seven days old are shown
+with publication times; only articles from the last 24 hours enter the risk adjustment.
+Older articles are explicitly labeled background context. No matching recent article
+is distinct from an unreachable feed.
 News raises volatility/jump uncertainty; headlines do not automatically imply a
 price direction. Feed availability and actual headlines are visible under Evidence.
 This limited rule-based coverage is not comprehensive geopolitical intelligence.
@@ -198,3 +214,21 @@ To rebuild the archive, install optional builder dependencies `xlrd`, `yfinance`
 `httpx`, then run `python scripts/build_history.py`. Cached public source files in
 `/tmp` are reused; absent files are fetched with normal TLS verification. Inspect
 coverage and rerun validation before publishing a changed archive.
+
+
+## Network access for development and deployment
+
+Allow outbound HTTPS to `feeds.bbci.co.uk` and `www.eia.gov` for server-side RSS,
+and `www.tradingview.com` for the backend reference snapshot. The official browser
+widget loads from `s3.tradingview.com` and `www.tradingview-widget.com`; TradingView
+may also use `widgets.tradingview-widget.com` and `data.tradingview.com` for its
+widget infrastructure. Browser network/CSP settings must allow the provider's scripts,
+frames and connections. Keep TLS verification enabled. A cloud environment's egress
+settings do not change Render/Netlify or visitors' browser settings.
+
+Check `/api/news` for reachable sources and dated articles, and `/api/market` for
+reference timestamp and usability. A reachable feed may have no new oil articles;
+EIA does not publish continuously. Confirm the widget actually shows TVC:USOIL and
+updates in a real browser before claiming live-price readiness. Its cross-origin
+price cannot be read into the forecasting backend. A stale reference still returns
+503 for forecasts; no alternate instrument or invented timestamp is substituted.

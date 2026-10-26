@@ -9,10 +9,10 @@ const response=(status,body,type='application/json')=>new Response(typeof body==
 function ui(fetchForecast){
  const timers=[], marketRequests=[];
  const elements={};
- const get=id=>elements[id]??=( {value:id==='leverage'?'5':id==='target'?'78':id==='chart-horizon'?'168':'',textContent:'',innerHTML:'',hidden:false,dataset:{},disabled:false,events:{},replaceChildren(){this.innerHTML=''},addEventListener(type,fn){this.events[type]=fn},setAttribute(key,value){this[key]=value}} );
- const context=vm.createContext({document:{getElementById:get},fetch:async(path,options)=>path==='/api/market'?(marketRequests.push(options),response(200,{quote:spot})):fetchForecast(path,options),AbortSignal,Date,console,setTimeout:(fn,ms)=>{timers.push({fn,ms});return 0},setInterval:()=>0});
+ const get=id=>elements[id]??=( {value:id==='leverage'?'5':id==='target'?'78':id==='chart-horizon'?'168':'',textContent:'',innerHTML:'',hidden:false,dataset:{},disabled:false,events:{},children:[],append(...nodes){this.children.push(...nodes)},replaceChildren(){this.innerHTML='';this.children=[]},addEventListener(type,fn){this.events[type]=fn},setAttribute(key,value){this[key]=value}} );
+ const context=vm.createContext({document:{getElementById:get,createElement:()=>({textContent:'',children:[],append(...nodes){this.children.push(...nodes)}})},fetch:async(path,options)=>path==='/api/market'?(marketRequests.push(options),response(200,{quote:spot})):path==='/api/news'?response(200,{sources:[],headlines:[]}):fetchForecast(path,options),AbortSignal,Date,console,setTimeout:(fn,ms)=>{timers.push({fn,ms});return 0},setInterval:()=>0});
  vm.runInContext(script,context);
- const api=vm.runInContext('({calculate,render,clearResults,projectionChart})',context);
+ const api=vm.runInContext('({calculate,render,clearResults,projectionChart,renderNews,refreshNews})',context);
  return {get,api,context,timers,marketRequests};
 }
 const fixture=()=>({quote:spot,target_price:78,price_change_percent:4,leverage:5,leveraged_return_percent:20,horizons:[1,3,5,24,168].map((hours,i)=>({hours,label:['1 hour','3 hours','5 hours','1 day','1 week'][i],probability:.1*i})),projection:Array.from({length:169},(_,hours)=>({hours,median:75,low:74-hours/100,high:76+hours/100})),model:{basis:'Range model',as_of_utc:new Date().toISOString()}});
@@ -54,8 +54,9 @@ test('proxy supports the new market and forecast endpoints',async()=>{
  const saved=process.env.OILPBOT_API_URL,nativeFetch=globalThis.fetch;
  try{
   process.env.OILPBOT_API_URL='https://backend.example.com';
-  globalThis.fetch=async(url)=>{assert.match(url.pathname,/\/api\/(market|forecast)/);return response(200,{ok:true})};
+  globalThis.fetch=async(url)=>{assert.match(url.pathname,/\/api\/(market|forecast|news)/);return response(200,{ok:true})};
   assert.equal((await handler({path:'/api/market',httpMethod:'GET'})).statusCode,200);
+  assert.equal((await handler({path:'/api/news',httpMethod:'GET'})).statusCode,200);
   assert.equal((await handler({path:'/api/forecast',httpMethod:'POST',body:'{}'})).statusCode,200);
   assert.equal((await handler({path:'/api/unknown',httpMethod:'GET'})).statusCode,404);
   globalThis.fetch=async()=>response(200,'<!doctype html>','text/html');
@@ -79,12 +80,12 @@ test('quotes poll every ten seconds without browser caching or redundant forecas
  let forecasts=0;
  const {api,timers,marketRequests}=ui(async()=>{forecasts++;return response(200,fixture())});
  await flush();
- assert.equal(timers.at(-1).ms,10000);
+ assert.equal(timers.findLast(t=>t.ms===10000).ms,10000);
  assert.equal(marketRequests[0].cache,'no-store');
  await api.calculate();
- await timers.at(-1).fn();
+ await timers.findLast(t=>t.ms===10000).fn();
  assert.equal(forecasts,1);
- assert.equal(timers.at(-1).ms,10000);
+ assert.equal(timers.findLast(t=>t.ms===10000).ms,10000);
 });
 
 test('a changed quote recalculates the forecast and an unusable quote clears it',async()=>{
@@ -93,11 +94,31 @@ test('a changed quote recalculates the forecast and an unusable quote clears it'
  await flush();await api.calculate();
  try {
   spot.price=75.5;
-  await timers.at(-1).fn();await flush();
+  await timers.findLast(t=>t.ms===10000).fn();await flush();
   assert.equal(forecasts,2);
   spot.usable=false;
-  await timers.at(-1).fn();
+  await timers.findLast(t=>t.ms===10000).fn();
   assert.doesNotMatch(get('cards').innerHTML,/40.0%/);
   assert.equal(forecasts,2);
  } finally {spot.price=75;spot.usable=true;}
+});
+
+
+test('independent news remains visible when forecasts are cleared',async()=>{
+ const {get,api,timers}=ui(async()=>response(503,{detail:'Stale quote'}));
+ await flush();
+ api.renderNews({sources:[{name:'EIA',available:true}],checked_at_utc:new Date().toISOString(),headlines:[{title:'Crude oil inventories',url:'https://www.eia.gov/story',source:'EIA',published_utc:new Date().toISOString(),used_for_risk:false}]});
+ assert.match(get('news-status').textContent,/1\/1 feeds reachable/);
+ assert.equal(get('news').children.length,1);
+ assert.match(get('news').children[0].children[1].textContent,/Background context/);
+ await api.calculate();
+ assert.equal(get('news').children.length,1);
+ assert.ok(timers.some(t=>t.ms===60000));
+});
+
+test('official quote widget requests the exact TVC instrument and labels the backend reference',()=>{
+ const html=readFileSync(new URL('../templates/index.html',import.meta.url),'utf8');
+ assert.match(html,/https:\/\/s3.tradingview.com\/external-embedding\/embed-widget-single-quote.js/);
+ assert.match(html,/"symbol":"TVC:USOIL"/);
+ assert.match(html,/Forecast reference quote/);
 });

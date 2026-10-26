@@ -60,3 +60,54 @@ def test_volatility_has_no_warmup_threshold_jump():
     before,after=with_count(20),with_count(21)
     assert abs(before['model']['annual_volatility']-after['model']['annual_volatility'])<.01
     assert max(abs(a['probability']-b['probability']) for a,b in zip(before['horizons'],after['horizons']))<.02
+
+
+def test_news_shows_background_but_does_not_apply_old_risk(monkeypatch):
+    import httpx
+    import src.intelligence as module
+    from email.utils import format_datetime
+    old = format_datetime(NOW-timedelta(days=4))
+    expired = format_datetime(NOW-timedelta(days=8))
+    xml=f'<rss><channel><item><title>Refineries face severe tanker attack</title><link>https://example.com/old</link><pubDate>{old}</pubDate></item><item><title>Expired oil news</title><pubDate>{expired}</pubDate></item></channel></rss>'
+    monkeypatch.setattr(module,'_until',0)
+    monkeypatch.setattr(module,'_cache',None)
+    monkeypatch.setattr(module.httpx,'get',lambda url,**kwargs:httpx.Response(200,text=xml,request=httpx.Request('GET',url)))
+    data=module.news_context(NOW)
+    assert data['coverage']==2
+    assert len(data['headlines'])==2
+    assert all(not h['used_for_risk'] for h in data['headlines'])
+    assert data['drivers']==[]
+    assert data['vol_multiplier']==1
+    assert data['checked_at_utc']
+
+
+def test_failed_news_retries_quickly_and_recovers_independently_of_quotes(monkeypatch):
+    import httpx
+    import src.intelligence as module
+    import src.forecast as forecast
+    from fastapi.testclient import TestClient
+    from src.main import app
+    clock=[1000.]
+    broken=[True]
+    def fetch(url,**kwargs):
+        # An HTML error page with HTTP 200 must not count as a healthy RSS feed.
+        xml='<html>Blocked</html>' if broken[0] else '<rss><channel></channel></rss>'
+        return httpx.Response(200,text=xml,request=httpx.Request('GET',url))
+    def no_quote():
+        raise AssertionError('News must not depend on a market quote')
+    monkeypatch.setattr(module,'_until',0)
+    monkeypatch.setattr(module,'_cache',None)
+    monkeypatch.setattr(module.time,'monotonic',lambda:clock[0])
+    monkeypatch.setattr(module.httpx,'get',fetch)
+    monkeypatch.setattr(forecast.feed,'get',no_quote)
+    data=module.news_context(NOW)
+    assert data['coverage']==0
+    broken[0]=False
+    assert module.news_context(NOW)['coverage']==0
+    clock[0]+=15
+    assert module.news_context(NOW)['coverage']==2
+    with TestClient(app) as client:
+        response=client.get('/api/news')
+        assert response.status_code==200
+        assert response.headers['cache-control']=='no-store'
+        assert response.json()['coverage']==2

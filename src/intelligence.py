@@ -21,43 +21,59 @@ SOURCES = {'BBC World': 'https://feeds.bbci.co.uk/news/world/rss.xml',
 _lock = threading.Lock()
 _cache = None
 _until = 0
+_checked_at = None
+NEWS_REFRESH_SECONDS = 60
+NEWS_MAX_AGE_SECONDS = 7 * 86400
 
 
 def news_context(now):
-    global _cache, _until
+    global _cache, _until, _checked_at
     with _lock:
         if time.monotonic() >= _until:
             def fetch(item):
                 name, url = item
                 try:
-                    r = httpx.get(url, timeout=4, follow_redirects=True)
+                    r = httpx.get(url, timeout=8, follow_redirects=True, headers={"User-Agent": "OilPBot/0.7", "Accept": "application/rss+xml, application/xml, text/xml"})
                     r.raise_for_status()
                     items = []
-                    for node in ET.fromstring(r.text).findall('.//item'):
+                    root = ET.fromstring(r.content)
+                    if root.tag != 'rss' or root.find('channel') is None:
+                        raise ValueError('Expected an RSS feed')
+                    for node in root.findall('.//item'):
                         try:
-                            published = parsedate_to_datetime(node.findtext('pubDate') or '').astimezone(timezone.utc)
+                            published = parsedate_to_datetime(node.findtext('pubDate') or '')
+                            if published.tzinfo is None:
+                                continue
+                            published = published.astimezone(timezone.utc)
                         except (ValueError, TypeError, AttributeError):
                             continue
                         items.append(RawHeadline(title=node.findtext('title') or '', source=name, published_utc=published,
                                                  url=node.findtext('link') or '', summary=node.findtext('description') or ''))
-                    return name, [h for h in items if 0 <= (now-h.published_utc).total_seconds() <= 86400
+                    return name, [h for h in items if 0 <= (now-h.published_utc).total_seconds() <= NEWS_MAX_AGE_SECONDS
                                   and any(k in (h.title+' '+h.summary).lower() for k in
-                                          ['oil','crude','opec','hormuz','iran','tanker','refinery','sanction','pipeline','petroleum'])], True
+                                          ['oil','crude','opec','hormuz','iran','tanker','refiner','sanction','pipeline','petroleum'])], True
                 except Exception:
                     previous = next((items for source, items, _ in (_cache or []) if source == name), [])
                     return name, previous, False
             with ThreadPoolExecutor(max_workers=2) as pool:
                 fetched = list(pool.map(fetch, SOURCES.items()))
             _cache = fetched
-            _until = time.monotonic()+600
+            _checked_at = datetime.now(timezone.utc)
+            _until = time.monotonic() + (NEWS_REFRESH_SECONDS if all(ok for _, _, ok in fetched) else 15)
         adjuster = NewsRiskAdjuster()
-        headlines = [h for _, items, _ in _cache for h in items if 0 <= (now-h.published_utc).total_seconds() <= 86400]
-        adjuster.ingest_headlines(headlines)
+        headlines = sorted([h for _, items, _ in _cache for h in items
+                            if 0 <= (now-h.published_utc).total_seconds() <= NEWS_MAX_AGE_SECONDS],
+                           key=lambda h: h.published_utc, reverse=True)
+        adjuster.ingest_headlines([h for h in headlines if (now-h.published_utc).total_seconds() <= 86400])
         adjustment = adjuster.compute_adjustment(now)
         return {'sources': [{'name':name,'url':SOURCES[name],'available':ok} for name,_,ok in _cache],
                 'coverage':sum(ok for _,_,ok in _cache),
                 'drivers':[{'title':d.title,'event_type':d.event_type,'impact':d.effective_impact} for d in adjustment.drivers[:5]],
-                'headlines':[{'title':h.title,'url':h.url,'published_utc':h.published_utc.isoformat()} for h in headlines[:8]],
+                'headlines':[{'title':h.title,'url':h.url,'source':h.source,
+                              'published_utc':h.published_utc.isoformat(),
+                              'used_for_risk':(now-h.published_utc).total_seconds() <= 86400} for h in headlines[:8]],
+                'checked_at_utc':_checked_at.isoformat() if _checked_at else None,
+                'refresh_seconds':NEWS_REFRESH_SECONDS,
                 'vol_multiplier':adjustment.vol_multiplier, 'jump_intensity':adjustment.jump_intensity_annual,
                 'method':'Rule-based clustering, scoring and time decay; limited free-feed coverage, not global understanding or sentiment certainty.'}
 

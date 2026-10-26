@@ -9,8 +9,19 @@
 </head>
 <body><main>
 <header><div><h1>Oil, simplified.</h1><p class="muted">A target. Evidence-aware scenarios.</p></div><span class="pill">WTI · TVC:USOIL</span></header>
-<section class="quote" aria-label="Latest oil quote"><div class="quote-line"><div><span id="price">$—</span><div id="status" class="muted" role="status">Connecting to oil data…</div></div><div><small id="quote-time">No verified quote yet</small><br><small><a href="https://www.tradingview.com/symbols/TVC-USOIL/" target="_blank" rel="noopener noreferrer">TradingView source ↗</a></small></div></div></section>
+<section class="quote" aria-label="TVC USOIL market price">
+<h2>TVC:USOIL market price</h2>
+<div class="tradingview-widget-container">
+<div class="tradingview-widget-container__widget"></div>
+<div class="tradingview-widget-copyright"><a href="https://www.tradingview.com/symbols/TVC-USOIL/" rel="noopener nofollow" target="_blank">TVC:USOIL on TradingView ↗</a></div>
+<script type="text/javascript" src="https://s3.tradingview.com/external-embedding/embed-widget-single-quote.js" async>
+{"symbol":"TVC:USOIL","width":"100%","isTransparent":true,"colorTheme":"dark","locale":"en"}
+</script></div>
+<p class="note">Price display supplied directly by TradingView. Updates and any delays are controlled by the provider. If the display cannot load, use the TradingView link above.</p>
+</section>
+<section class="quote" aria-label="Forecast reference quote"><h2>Forecast reference quote</h2><p class="note">The timestamp below belongs to the backend snapshot used for calculations. It may lag the TradingView display. Forecasts are refused when it is too old.</p><div class="quote-line"><div><span id="price">$—</span><div id="status" class="muted" role="status">Connecting to oil data…</div></div><div><small id="quote-time">No verified quote yet</small><br><small><a href="https://www.tradingview.com/symbols/TVC-USOIL/" target="_blank" rel="noopener noreferrer">TradingView source ↗</a></small></div></div></section>
 <div id="error" class="error" role="alert" hidden></div>
+<section class="panel" aria-label="Oil news" style="margin-bottom:24px"><h2>Oil &amp; energy news</h2><p id="news-status" class="note" role="status">Checking news sources…</p><div id="news"></div><p class="note">Automatically checked every minute. Articles show their publication date; only articles from the last 24 hours affect news risk. Older articles are background context.</p></section>
 <div class="layout"><aside class="panel"><form id="forecast-form">
 <div class="field"><label for="target">Your target price · USD / barrel</label><input id="target" type="number" min="0.01" max="1000000" step="0.01" placeholder="e.g. 105.00" required inputmode="decimal"></div>
 <div class="field"><label>Direction</label><div class="directions" role="group" aria-label="Direction"><button type="button" id="long" aria-pressed="true">Long ↗</button><button type="button" id="short" aria-pressed="false">Short ↘</button></div></div>
@@ -20,7 +31,7 @@
 </form></aside>
 <div class="stack"><section class="panel"><h2>Chance of touching your target</h2><p class="muted" style="font-size:13px">At least once within each period, starting now.</p>
 <div class="cards" id="cards"><div class="card"><span>1 hour</span><strong>—</strong></div><div class="card"><span>3 hours</span><strong>—</strong></div><div class="card"><span>5 hours</span><strong>—</strong></div><div class="card"><span>1 day</span><strong>—</strong></div><div class="card"><span>1 week</span><strong>—</strong></div></div>
-<div id="probability-chart" class="chart" aria-label="Touch probabilities"><p class="muted">Enter a target to see estimated probabilities.</p></div><div class="summary" id="summary"></div><p id="outlook" class="info"></p><details class="note"><summary>Evidence &amp; news</summary><p id="evidence"></p><div id="news"></div></details><p class="info" id="closed-note" hidden></p>
+<div id="probability-chart" class="chart" aria-label="Touch probabilities"><p class="muted">Enter a target to see estimated probabilities.</p></div><div class="summary" id="summary"></div><p id="outlook" class="info"></p><details class="note"><summary>Forecast evidence</summary><p id="evidence"></p></details><p class="info" id="closed-note" hidden></p>
 </section><section class="panel"><div class="heading"><h2>Possible price movement</h2><select id="chart-horizon" aria-label="Projection time horizon"><option value="1">1 hour</option><option value="3">3 hours</option><option value="5">5 hours</option><option value="24">1 day</option><option value="168" selected>1 week</option><option value="720">1 month</option></select></div><p class="muted" style="font-size:12px">Timeline shown in your local timezone. Crossing marker is illustrative, not an arrival prediction. Dotted scenarios: red adverse · gray middle · green favorable for your direction. Target line in amber.</p><div id="projection-chart" class="chart"><p class="muted">Your projected range will appear here.</p></div><p class="note" id="model-note">A model range is not a prediction of the actual path.</p></section></div></div>
 <footer><a href="/api/statistics" target="_blank" rel="noopener">Storage &amp; outcome statistics ↗</a><br>Estimates, not guarantees. News-aware Monte Carlo estimates are experimental and uncalibrated. Scenarios are percentiles, not worst/best limits. Regular WTI trading hours are modeled; holidays, gaps, fees and financing are excluded. TVC:USOIL is a TradingView instrument, not a Nasdaq-listed security.</footer>
 </main><script src="/app.js" defer></script></body></html>
