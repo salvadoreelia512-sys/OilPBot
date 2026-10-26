@@ -73,3 +73,15 @@ def test_tick_history_keeps_four_hour_window_for_volatility(database):
     assert len(history)<=1000
     assert history[-1][0]-history[0][0]>4*3600
     assert len({int(ts)//60 for ts,_ in history})==len(history)
+
+
+def test_model_versions_are_not_mixed_in_calibration_statistics(database,monkeypatch):
+    now=datetime(2026,10,21,12,tzinfo=timezone.utc)
+    monkeypatch.setattr(storage,'MODEL_VERSION','old-test-model')
+    storage.save_forecast(result(now),now)
+    monkeypatch.setattr(storage,'MODEL_VERSION','new-test-model')
+    storage.save_forecast(result(now),now)
+    storage.record_quote(OilSnapshot(79,now+timedelta(minutes=10),80,74))
+    rows=storage.statistics(now+timedelta(hours=2))['observation_based_brier_by_horizon']
+    assert {r['model_version'] for r in rows}=={'old-test-model','new-test-model'}
+    assert all(r['count']==1 for r in rows)

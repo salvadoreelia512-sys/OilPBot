@@ -8,6 +8,7 @@ RUN --mount=type=secret,id=pip_ca \
 RUN useradd --create-home app && mkdir /data && chown app:app /data
 COPY --chown=app:app src ./src
 COPY --chown=app:app templates ./templates
+COPY --chown=app:app scripts ./scripts
 USER app
 ENV SQLITE_DB_PATH=/data/oil_bot.db PYTHONDONTWRITEBYTECODE=1
 EXPOSE 8000

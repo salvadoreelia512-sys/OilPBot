@@ -33,11 +33,11 @@ There are no user inputs for OVX, required return, or data mode.
   During closures, the latest close is accepted only if no more than 15 minutes of
   scheduled trading have elapsed since its timestamp (and it is under 96 hours old).
   The UI explicitly labels it **Market closed · last session quote**.
-- The model uses shared jump-diffusion Monte Carlo paths, a momentum drift gated by
-  sampling uncertainty, and an automatic volatility blend. Its cold-start baseline is
-  the single-session Parkinson high/low estimate, bounded to 10–150% annualized.
-  This is preliminary and uncalibrated; percentages are model estimates, not measured
-  accuracy. A price fan shows model uncertainty, not the actual future path.
+- The central estimate uses a daily-volatility, zero-drift baseline evaluated on
+  held-out daily TVC:USOIL high/low target touches. More complex regime and
+  inventory-weighted candidates did not clear the upgrade gate. Their assumptions
+  are not presented as established predictive improvements. Live intraday-origin
+  calibration and a profitable directional edge remain unvalidated.
 - Horizons start at the request time. The regular WTI schedule excludes weekends and
   the daily 17:00–18:00 New York break, with DST handled. Holidays, exceptional closures,
   jumps, fees and financing are not modeled. Closed horizons have no modeled movement.
@@ -106,13 +106,20 @@ market hours and DST, monotone horizon probabilities, leverage independence, inp
 validation, UI state and charts, proxy routes, and legacy simulation/calibration logic.
 A controlled-feed test does not establish live-source access or probability calibration.
 
-## Evidence-aware Monte Carlo update
+## Strategic baseline and separate risk scenarios
 
-The main forecast now runs 12,000 shared jump-diffusion paths through one month,
-with common random numbers across requests, Brownian-bridge barrier corrections
-(approximate when jumps occur), and 10th/50th/90th percentile scenarios. Higher
-cumulative touch probabilities at longer horizons are expected, not instability.
-The reported sampling margin describes Monte Carlo noise, not forecast accuracy.
+The central estimate uses 60 daily return observations with exponentially weighted
+variance (0.97), anchored to completed daily TVC bars rather than individual
+live ticks or headlines. It calculates GBM touch probabilities analytically, with
+no new Monte Carlo noise. Higher cumulative touch probabilities at longer horizons
+are expected. News is not assumed to create a directional edge.
+
+Temporary headline and US supply stress are separate, explicitly unvalidated
+scenarios. A shared 6,000-path jump-diffusion simulation uses a six-calendar-hour
+headline half-life and a five-trading-day fundamental-stress half-life. It does not
+extrapolate a current news shock unchanged for a month. Common random streams keep
+like-for-like stress comparisons reproducible. These decay rates and stress weights
+are assumptions, not measured effects or forecast confidence bounds.
 
 BBC World, EIA Today in Energy and OilPrice RSS are fetched without keys, cached for one
 minute, filtered for oil-relevant dated articles, clustered, scored and decayed.
@@ -124,7 +131,7 @@ headlines are deduplicated and ranked by potential oil relevance plus recency; s
 publication time and potential relevance are shown. Ranking is a transparent heuristic,
 not a measured price-impact forecast, and no fictional headlines are generated. No matching recent article
 is distinct from an unreachable feed.
-News raises volatility/jump uncertainty; headlines do not automatically imply a
+News raises volatility/jump uncertainty in the separate stress scenario; headlines do not automatically imply a
 price direction. Feed availability and actual headlines are visible under Evidence.
 This limited rule-based coverage is not comprehensive geopolitical intelligence.
 There are no new paid services, API keys, AI providers, or AIS subscriptions.
@@ -132,16 +139,13 @@ There are no new paid services, API keys, AI providers, or AIS subscriptions.
 Distinct TVC quote observations accumulate in the selected database when market
 requests are served. The model reads the latest quote per minute over up to 1,000
 minutes, so dense live ticks do not shrink its four-hour volatility warmup window.
-After at least 20 return intervals spanning four trading hours, empirical volatility
-is blended with session-range volatility. Shrunk momentum is used only when its
-approximate sampling interval excludes zero. Sparse observations are not minute bars;
-weekend gaps are not treated as continuous trading. Render free-instance restarts
-may lose this history without a persistent volume, and an inactive service does not
-collect uninterrupted data.
+Live history supports future exact-instrument outcome validation; it is no longer
+used to turn a few hours of momentum into a directional recommendation. Free Render
+sleep and missing observations still limit uninterrupted outcome collection.
 
 The experimental outlook can suggest long/short, a one-week reference target, or
-WAIT. It waits for insufficient history, incomplete feed coverage, closed markets,
-or inconclusive momentum. Leverage is a 1× reference, not personalized sizing.
+WAIT. No directional model has passed independent validation, so setups remain conditional
+scenarios in the user-selected direction. No measured profitable edge is claimed. Leverage is a 1× reference, not personalized sizing.
 No calibrated hit rate, profitable edge, safe leverage, or precise geopolitical
 price effect is claimed. The news adjustment has not passed an out-of-sample gate;
 existing calibration harnesses remain available for future validation. Live inventory
@@ -199,16 +203,9 @@ baseline's 0.001075; directional accuracy was 51.9%. This candidate was NOT prom
 Revised historical datasets are not point-in-time vintages; this is not an unbiased
 real-time strategy simulation or validation of intraday barrier-touch accuracy.
 
-The last 60 WTI spot returns form an EWMA annual volatility prior. Cold-start volatility
-blends 80% of this proxy prior with 20% of current TVC session range volatility. Live volatility is admitted gradually with observation count and trading-time coverage,
-capped at 70% weight, avoiding an abrupt switch at the warmup threshold.
-Stock/GPR return coefficients are not used to create a directional edge that failed
-validation. Current news still adjusts jump/volatility risk immediately.
-
-Each simulation hour now uses separately seeded diffusion/bridge and jump streams.
-Minor news changes do not scramble all subsequent diffusion draws. No probability
-clipping or cosmetic smoothing hides real price/risk changes. Percentages remain
-uncalibrated estimates, and accumulating independent outcomes is still necessary.
+The older spot/stock/GPR archive remains available for comparison and compatibility.
+It no longer determines the central forecast volatility. The strategic model instead
+uses `src/data/strategic.json` and its matching validation report.
 
 The chart displays local date/time ticks for the selected horizon. Its guide marks
 the earliest interpolated crossing of any of the displayed percentile curves, with
@@ -262,3 +259,51 @@ breakout scenario in the user's selected direction. It never turns missing evide
 into a supposedly validated recommendation. Its targets are distinct from the target
 entered for touch-probability calculation. A supported experimental momentum signal can
 select its own direction; all reference levels belong to that same frozen calculation.
+
+
+## Reproducible strategic validation
+
+`src/data/strategic.json` contains 4,231 TVC:USOIL daily OHLC bars from 2010
+through 2026-10-23, plus 929 weekly observations each for EIA commercial crude stocks
+and US production. Source fingerprints, units, availability lags and limitations are
+exposed at `/api/strategy`. The public service resolved `pro_name=TVC:USOIL`, `America/New_York`, and
+`1800-1700`. Bar dates denote the session end day; the current unfinished session is
+excluded. These are provider historical bars, not point-in-time vintages. Nonpositive-price outcome windows are explicitly
+excluded because the positive-price GBM cannot represent them.
+
+```bash
+python scripts/build_strategic_data.py --refresh
+python scripts/evaluate_strategic.py
+```
+
+Development selection ends before 2019. Later, non-overlapping 5/21-session outcome
+windows test three fixed target distances in each direction using subsequent daily
+highs/lows. Each forecast uses only earlier known daily prices; EIA values have a
+conservative seven-calendar-day availability lag. Six-origin block resampling clusters
+all targets from an origin. Reports include Brier scores, reliability bins, aggregate
+calibration gaps, directional splits and a development-frequency benchmark. Revised
+source histories are not point-in-time vintages; release revisions and retrospective provider history
+prevent interpreting this as an unbiased real-time trading backtest.
+
+Weekly baseline Brier was approximately 0.192 over 392 origins (2,352 correlated
+barrier cases); monthly approximately 0.191 over 93 origins (558 cases). Aggregate
+calibration gaps were about 2.3 and 3.0 percentage points. These are diagnostics for
+the evaluated daily-origin TVC cohort, not an accuracy guarantee or an error bound for a user's
+forecast. Regime/fundamental candidates were not promoted: the weekly candidate was worse,
+and the monthly improvement interval included zero. Weekly baseline Brier did not
+beat the development-frequency benchmark; monthly baseline did. These comparisons
+do not establish future skill. Arbitrary live-origin/hourly touch calibration, historical headline effects, global
+supply/demand, futures curve, USD/rates and positioning remain incomplete.
+
+A background refresh downloads free daily and EIA data when a newer completed trading
+day is missing, with a 12-hour retry interval. It writes atomic caches under `/tmp`,
+never repository source files, and recomputes the fixed validation protocol. Refresh
+cannot automatically promote a new candidate. A fingerprint mismatch removes promotion;
+central forecasts are refused if daily history is over ten calendar days old. Source
+failures preserve the dated archive and report a refresh failure. Free instances can
+sleep; collection and refresh do not run while asleep. The strategic archive starts
+current but does not create a permanently guaranteed market data service.
+
+Forecast records use model version `strategic-tvc-v1`. Live observation-based Brier
+statistics are separated by version so earlier model results are not mixed into the
+new model. Sparse quote samples still do not establish continuous-touch accuracy.

@@ -13,3 +13,5 @@ uvicorn>=0.28.0
 websockets>=15.0,<18
 
 psycopg[binary]>=3.2,<4
+
+xlrd>=2.0.1,<3

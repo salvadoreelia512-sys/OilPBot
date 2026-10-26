@@ -14,7 +14,7 @@ class StorageUnavailable(RuntimeError):
     pass
 
 
-MODEL_VERSION = 'news-mc-v2-history'
+MODEL_VERSION = 'strategic-tvc-v1'
 
 
 class Connection:
@@ -75,6 +75,9 @@ def save_forecast(result, now):
                'news_coverage':context['coverage'], 'news_vol_multiplier':context['vol_multiplier'],
                'news_jump_intensity':context['jump_intensity'],
                'news_ids':[], 'quote_price':result['quote']['price']}
+    if result.get('strategic'):
+        s=result['strategic']
+        compact['strategic']={key:s.get(key) for key in ('data_sha256','last_bar','model','fundamentals','risk_assumptions','proxy_validation_promoted')}
     created = now.timestamp()
     quote_ts = datetime.fromisoformat(result['quote']['timestamp_utc']).timestamp()
     key = json.dumps([int(created//60),quote_ts,result['target_price'],result['direction'],
@@ -125,12 +128,12 @@ def statistics(now=None):
         news=db.execute('SELECT COUNT(*) FROM oil_news').fetchone()[0]
         historical=db.execute('SELECT COUNT(*) FROM oil_historical').fetchone()[0]
         statuses=dict(db.execute('SELECT status,COUNT(*) FROM oil_outcomes GROUP BY status').fetchall())
-        rows=db.execute('SELECT hours,probability,outcome FROM oil_outcomes WHERE outcome IS NOT NULL').fetchall()
+        rows=db.execute('SELECT f.model_version,o.hours,o.probability,o.outcome FROM oil_outcomes o JOIN oil_forecasts f ON f.id=o.forecast_id WHERE o.outcome IS NOT NULL').fetchall()
     groups={}
-    for hours,p,y in rows:
-        groups.setdefault(hours,[]).append((p,y))
+    for version,hours,p,y in rows:
+        groups.setdefault((version,hours),[]).append((p,y))
     return {'backend':'postgresql' if os.getenv('DATABASE_URL') else 'sqlite', 'connected':True,
             'historical_observations':historical,'observations':count,'forecasts':forecasts,'news_articles':news,'outcomes':statuses,
-            'observation_based_brier_by_horizon':[{'hours':h,'count':len(v),'score':sum((p-y)**2 for p,y in v)/len(v)} for h,v in sorted(groups.items())],
+            'observation_based_brier_by_horizon':[{'model_version':version,'hours':h,'count':len(v),'score':sum((p-y)**2 for p,y in v)/len(v)} for (version,h),v in sorted(groups.items())],
             'limitations':'Observation-based diagnostics, not validated continuous-touch accuracy. Brief touches may be missed, gaps are excluded, overlapping forecasts are correlated. No hit-rate claim before adequate independent out-of-sample data.',
             'collection':'Only while the service is active; Render free sleep interrupts collection.'}

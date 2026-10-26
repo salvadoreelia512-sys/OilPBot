@@ -228,6 +228,13 @@ async def live_market(socket: WebSocket):
         pass
 
 
+@router.get("/api/strategy")
+def strategy_report(response: Response):
+    from src.strategic import context
+    response.headers["Cache-Control"] = "no-store"
+    return context(datetime.now(timezone.utc))
+
+
 @router.get("/api/news")
 def news(response: Response):
     from src.intelligence import news_context

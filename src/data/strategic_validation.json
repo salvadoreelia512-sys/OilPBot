@@ -1,0 +1,445 @@
+{
+  "version": "strategic-tvc-v1",
+  "data_sha256": "08963e55b0be1449cdbc68ca982541ae81adc73f819cf572bb2c9010c613595d",
+  "development_end_exclusive": "2019-01-01",
+  "heldout_start": "2019-01-01",
+  "selected_on_development": "regime",
+  "selected_model": "baseline",
+  "promoted": false,
+  "horizons": {
+    "1 week": {
+      "trading_days": 5,
+      "first_origin": "2019-01-03",
+      "last_origin": "2026-10-15",
+      "models": {
+        "baseline": {
+          "cases": 2352,
+          "origins": 392,
+          "brier": 0.19176341027314198,
+          "ece": 0.023470181923299836,
+          "reliability_bins": [
+            {
+              "lower": 0.0,
+              "count": 13,
+              "predicted": 0.09590403329163759,
+              "observed": 0.07692307692307693
+            },
+            {
+              "lower": 0.1,
+              "count": 771,
+              "predicted": 0.1345008685384588,
+              "observed": 0.13488975356679636
+            },
+            {
+              "lower": 0.2,
+              "count": 22,
+              "predicted": 0.2696134319070359,
+              "observed": 0.22727272727272727
+            },
+            {
+              "lower": 0.3,
+              "count": 762,
+              "predicted": 0.3188668195337145,
+              "observed": 0.30183727034120733
+            },
+            {
+              "lower": 0.5,
+              "count": 23,
+              "predicted": 0.5693721202628478,
+              "observed": 0.34782608695652173
+            },
+            {
+              "lower": 0.6,
+              "count": 761,
+              "predicted": 0.6184648020253232,
+              "observed": 0.5716162943495401
+            }
+          ],
+          "direction_brier": {
+            "long": 0.18414434702049545,
+            "short": 0.19938247352578853
+          }
+        },
+        "regime": {
+          "cases": 2352,
+          "origins": 392,
+          "brier": 0.20417167338508202,
+          "ece": 0.058425651208836665,
+          "reliability_bins": [
+            {
+              "lower": 0.0,
+              "count": 13,
+              "predicted": 0.09590403329163759,
+              "observed": 0.07692307692307693
+            },
+            {
+              "lower": 0.1,
+              "count": 695,
+              "predicted": 0.13698936010740748,
+              "observed": 0.1366906474820144
+            },
+            {
+              "lower": 0.2,
+              "count": 65,
+              "predicted": 0.2842171546557277,
+              "observed": 0.18461538461538463
+            },
+            {
+              "lower": 0.3,
+              "count": 645,
+              "predicted": 0.32410670405002606,
+              "observed": 0.3054263565891473
+            },
+            {
+              "lower": 0.4,
+              "count": 11,
+              "predicted": 0.47120871317218854,
+              "observed": 0.09090909090909091
+            },
+            {
+              "lower": 0.5,
+              "count": 100,
+              "predicted": 0.5681077598697123,
+              "observed": 0.29
+            },
+            {
+              "lower": 0.6,
+              "count": 714,
+              "predicted": 0.6247859178387722,
+              "observed": 0.5518207282913166
+            },
+            {
+              "lower": 0.7,
+              "count": 37,
+              "predicted": 0.7401338954209601,
+              "observed": 0.3783783783783784
+            },
+            {
+              "lower": 0.8,
+              "count": 72,
+              "predicted": 0.8467175482157092,
+              "observed": 0.5555555555555556
+            }
+          ],
+          "direction_brier": {
+            "long": 0.19436827020654374,
+            "short": 0.2139750765636203
+          }
+        },
+        "regime_fundamentals": {
+          "cases": 2352,
+          "origins": 392,
+          "brier": 0.2067136477626416,
+          "ece": 0.07115148992319857,
+          "reliability_bins": [
+            {
+              "lower": 0.1,
+              "count": 692,
+              "predicted": 0.14669810824115323,
+              "observed": 0.13728323699421965
+            },
+            {
+              "lower": 0.2,
+              "count": 47,
+              "predicted": 0.268999997306517,
+              "observed": 0.1702127659574468
+            },
+            {
+              "lower": 0.3,
+              "count": 662,
+              "predicted": 0.33473134854546865,
+              "observed": 0.30362537764350456
+            },
+            {
+              "lower": 0.4,
+              "count": 24,
+              "predicted": 0.4478705538737979,
+              "observed": 0.08333333333333333
+            },
+            {
+              "lower": 0.5,
+              "count": 69,
+              "predicted": 0.5714628857478499,
+              "observed": 0.2318840579710145
+            },
+            {
+              "lower": 0.6,
+              "count": 724,
+              "predicted": 0.6313803402452306,
+              "observed": 0.5538674033149171
+            },
+            {
+              "lower": 0.7,
+              "count": 60,
+              "predicted": 0.7356408506015936,
+              "observed": 0.3333333333333333
+            },
+            {
+              "lower": 0.8,
+              "count": 74,
+              "predicted": 0.853519067604907,
+              "observed": 0.5405405405405406
+            }
+          ],
+          "direction_brier": {
+            "long": 0.19654937034287448,
+            "short": 0.21687792518240878
+          }
+        }
+      },
+      "selected_minus_baseline_brier_improvement_95pct": [
+        -0.02294568844012645,
+        -0.003447200574104173
+      ],
+      "passes_upgrade_gate": false,
+      "excluded_nonpositive_price_windows": 0,
+      "development_frequency_benchmark_brier": 0.1906807321973211,
+      "baseline_beats_frequency_benchmark": false
+    },
+    "1 month": {
+      "trading_days": 21,
+      "first_origin": "2019-01-02",
+      "last_origin": "2026-09-11",
+      "models": {
+        "baseline": {
+          "cases": 558,
+          "origins": 93,
+          "brier": 0.19099896661086235,
+          "ece": 0.03042946617027702,
+          "reliability_bins": [
+            {
+              "lower": 0.0,
+              "count": 4,
+              "predicted": 0.07337211307759081,
+              "observed": 0.0
+            },
+            {
+              "lower": 0.1,
+              "count": 182,
+              "predicted": 0.13522708820873564,
+              "observed": 0.12637362637362637
+            },
+            {
+              "lower": 0.2,
+              "count": 36,
+              "predicted": 0.2892544400133196,
+              "observed": 0.19444444444444445
+            },
+            {
+              "lower": 0.3,
+              "count": 147,
+              "predicted": 0.3229496749125987,
+              "observed": 0.3469387755102041
+            },
+            {
+              "lower": 0.4,
+              "count": 6,
+              "predicted": 0.4741187874899723,
+              "observed": 0.16666666666666666
+            },
+            {
+              "lower": 0.5,
+              "count": 33,
+              "predicted": 0.5934786678001106,
+              "observed": 0.5454545454545454
+            },
+            {
+              "lower": 0.6,
+              "count": 147,
+              "predicted": 0.6222754620052331,
+              "observed": 0.6054421768707483
+            },
+            {
+              "lower": 0.7,
+              "count": 3,
+              "predicted": 0.7437547704246933,
+              "observed": 0.0
+            }
+          ],
+          "direction_brier": {
+            "long": 0.18176845241893178,
+            "short": 0.20022948080279296
+          }
+        },
+        "regime": {
+          "cases": 558,
+          "origins": 93,
+          "brier": 0.2094084941235811,
+          "ece": 0.0764748094086434,
+          "reliability_bins": [
+            {
+              "lower": 0.0,
+              "count": 14,
+              "predicted": 0.0821501766275575,
+              "observed": 0.0
+            },
+            {
+              "lower": 0.1,
+              "count": 149,
+              "predicted": 0.14371322596274602,
+              "observed": 0.10738255033557047
+            },
+            {
+              "lower": 0.2,
+              "count": 48,
+              "predicted": 0.26745628359808893,
+              "observed": 0.3125
+            },
+            {
+              "lower": 0.3,
+              "count": 119,
+              "predicted": 0.3387230271411813,
+              "observed": 0.31932773109243695
+            },
+            {
+              "lower": 0.4,
+              "count": 9,
+              "predicted": 0.45337920375046725,
+              "observed": 0.4444444444444444
+            },
+            {
+              "lower": 0.5,
+              "count": 35,
+              "predicted": 0.5783665097350082,
+              "observed": 0.5714285714285714
+            },
+            {
+              "lower": 0.6,
+              "count": 133,
+              "predicted": 0.634545426345915,
+              "observed": 0.5714285714285714
+            },
+            {
+              "lower": 0.7,
+              "count": 17,
+              "predicted": 0.7590661722995806,
+              "observed": 0.17647058823529413
+            },
+            {
+              "lower": 0.8,
+              "count": 21,
+              "predicted": 0.8553416028160751,
+              "observed": 0.47619047619047616
+            },
+            {
+              "lower": 0.9,
+              "count": 13,
+              "predicted": 0.9273346865368537,
+              "observed": 0.5384615384615384
+            }
+          ],
+          "direction_brier": {
+            "long": 0.18981312334870468,
+            "short": 0.22900386489845745
+          }
+        },
+        "regime_fundamentals": {
+          "cases": 558,
+          "origins": 93,
+          "brier": 0.21149330870678115,
+          "ece": 0.0953274602165377,
+          "reliability_bins": [
+            {
+              "lower": 0.0,
+              "count": 8,
+              "predicted": 0.08130275660947339,
+              "observed": 0.0
+            },
+            {
+              "lower": 0.1,
+              "count": 141,
+              "predicted": 0.14636280095850596,
+              "observed": 0.09219858156028368
+            },
+            {
+              "lower": 0.2,
+              "count": 48,
+              "predicted": 0.2534114026661667,
+              "observed": 0.3125
+            },
+            {
+              "lower": 0.3,
+              "count": 124,
+              "predicted": 0.34270543604787634,
+              "observed": 0.29838709677419356
+            },
+            {
+              "lower": 0.4,
+              "count": 13,
+              "predicted": 0.42573222317804527,
+              "observed": 0.5384615384615384
+            },
+            {
+              "lower": 0.5,
+              "count": 32,
+              "predicted": 0.5694874570665154,
+              "observed": 0.53125
+            },
+            {
+              "lower": 0.6,
+              "count": 138,
+              "predicted": 0.640499202322038,
+              "observed": 0.5652173913043478
+            },
+            {
+              "lower": 0.7,
+              "count": 18,
+              "predicted": 0.7593296669305762,
+              "observed": 0.2777777777777778
+            },
+            {
+              "lower": 0.8,
+              "count": 23,
+              "predicted": 0.8574778989573808,
+              "observed": 0.43478260869565216
+            },
+            {
+              "lower": 0.9,
+              "count": 13,
+              "predicted": 0.931194134216688,
+              "observed": 0.5384615384615384
+            }
+          ],
+          "direction_brier": {
+            "long": 0.18992397457461208,
+            "short": 0.2330626428389502
+          }
+        }
+      },
+      "selected_minus_baseline_brier_improvement_95pct": [
+        -0.04785958503823021,
+        0.002272682882569164
+      ],
+      "passes_upgrade_gate": false,
+      "excluded_nonpositive_price_windows": 0,
+      "development_frequency_benchmark_brier": 0.19546562984676108,
+      "baseline_beats_frequency_benchmark": true
+    }
+  },
+  "directional_edge_validated": false,
+  "exact_tvc_touch_validated": false,
+  "daily_tvc_touch_evaluated": true,
+  "instrument": "TVC:USOIL",
+  "method": "Daily TVC:USOIL OHLC target touches; non-overlapping 5/21-session windows; three fixed standardized barriers per direction. Training inputs strictly known at each origin. EIA seven-day availability lag. Selection before 2019, evaluation from 2019; six-origin block bootstrap clusters all barriers.",
+  "limitations": [
+    "Historical TVC:USOIL provider bars are not point-in-time vintages; provider revisions and feed methodology can change.",
+    "Downloaded history is revised data, not point-in-time vintages.",
+    "Weekly EIA values use a conservative seven-calendar-day publication lag.",
+    "Daily-origin high/low touch labels do not validate hourly or arbitrary live intraday-origin probabilities.",
+    "Target selection uses baseline volatility; results do not cover arbitrary targets or hourly horizons.",
+    "Cross-horizon outcomes overlap and are not independent. Block intervals do not remove all regime dependence.",
+    "No news feature has historical out-of-sample validation. Daily-origin and 5/21-session results do not calibrate arbitrary live origins or exact calendar horizons. No guaranteed future accuracy."
+  ],
+  "development_brier": {
+    "5": {
+      "baseline": 0.18785889545600254,
+      "regime": 0.1879735779151113,
+      "regime_fundamentals": 0.18931082000158117
+    },
+    "21": {
+      "baseline": 0.2104566111794923,
+      "regime": 0.20836275928956172,
+      "regime_fundamentals": 0.2088211477054209
+    }
+  }
+}

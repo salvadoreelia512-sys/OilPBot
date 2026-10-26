@@ -11,7 +11,7 @@ def run(direction='long',leverage=5,context=C):
     q=ForecastRequest(target_price=78 if direction=='long' else 72,direction=direction,leverage=leverage)
     return enhance(estimate(S,q,NOW),S,q,NOW,context=context,observations=[])
 
-def test_monte_carlo_reproducible_nested_and_leverage_independent():
+def test_baseline_reproducible_nested_and_leverage_independent():
     a=run();b=run(leverage=10)
     assert a['horizons']==b['horizons']
     p=[r['probability'] for r in a['horizons']]
@@ -22,8 +22,11 @@ def test_monte_carlo_reproducible_nested_and_leverage_independent():
 
 def test_news_changes_risk_and_scenarios_without_invented_direction():
     a=run();b=run(context={**C,'vol_multiplier':2,'jump_intensity':20})
-    assert b['model']['annual_volatility']>a['model']['annual_volatility']
-    assert b['projection'][-1]['high']-b['projection'][-1]['low']>a['projection'][-1]['high']-a['projection'][-1]['low']
+    assert b['model']['annual_volatility']==a['model']['annual_volatility']
+    assert b['projection']==a['projection']
+    assert [h['probability'] for h in a['horizons']]==[h['probability'] for h in b['horizons']]
+    assert b['strategic']['risk_assumptions']['news_volatility_scale']>a['strategic']['risk_assumptions']['news_volatility_scale']
+    assert b['strategic']['long_term'][0]['stress_range']['high']>a['strategic']['long_term'][0]['stress_range']['high']
     assert b['outlook']['action']=='wait'
 
 def test_short_probability_and_sampling_error():

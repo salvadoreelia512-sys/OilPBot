@@ -2,6 +2,7 @@
 const $ = id => document.getElementById(id);
 let direction = 'long', result = null, quote = null, busy = false, generation = 0, newsData = null, newsExpiresAt = Infinity;
 const fmt = value => Number(value).toFixed(2);
+const probabilityText = p => p>0 && p<.001 ? '<0.1%' : p<1 && p>.999 ? '>99.9%' : (p*100).toFixed(1)+'%';
 const labels = ['1 hour', '3 hours', '5 hours', '1 day', '1 week', '1 month'];
 const escapeText = value => String(value).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
@@ -40,7 +41,7 @@ function svg(content, description, height = 190) {
 }
 function probabilityChart(rows) {
     const pts=rows.map((r,i)=>({x:45+i*(550/Math.max(1,rows.length-1)),y:145-r.probability*110,row:r}));
-    return svg(`<path d="${pts.map((p,i)=>`${i?'L':'M'}${p.x},${p.y}`).join(' ')}" fill="none" stroke="#6fe0bf" stroke-width="2"/>`+pts.map(p=>`<circle cx="${p.x}" cy="${p.y}" r="4" fill="#6fe0bf"/><text x="${p.x}" y="${p.y-12}" text-anchor="middle">${(p.row.probability*100).toFixed(1)}%</text><text x="${p.x}" y="175" text-anchor="middle">${escapeText(p.row.label)}</text>`).join(''),'Estimated target-touch probabilities by horizon');
+    return svg(`<path d="${pts.map((p,i)=>`${i?'L':'M'}${p.x},${p.y}`).join(' ')}" fill="none" stroke="#6fe0bf" stroke-width="2"/>`+pts.map(p=>`<circle cx="${p.x}" cy="${p.y}" r="4" fill="#6fe0bf"/><text x="${p.x}" y="${p.y-12}" text-anchor="middle">${escapeText(probabilityText(p.row.probability))}</text><text x="${p.x}" y="175" text-anchor="middle">${escapeText(p.row.label)}</text>`).join(''),'Estimated target-touch probabilities by horizon');
 }
 function firstScenarioCrossing(data,hours) {
     const points=data.projection.filter(p=>p.hours<=hours), found=[];
@@ -80,8 +81,8 @@ function projectionChart(data, hours) {
 }
 function render(data) {
     result = data; showQuote(data.quote);
-    $('forecast-state').textContent=`Fixed snapshot calculated ${new Date(data.model.as_of_utc).toLocaleString()} · ${data.direction?.toUpperCase() || direction.toUpperCase()} target $${fmt(data.target_price)}. Live prices and news do not change these results. Press Calculate probability for a new snapshot. MC margins describe simulation noise, not forecast accuracy.`;
-    $('cards').innerHTML = data.horizons.map(row=>`<div class="card"><span>${escapeText(row.label)}</span><strong>${(row.probability*100).toFixed(1)}%</strong>${Number.isFinite(row.sampling_error_pp)?`<small>MC ±${row.sampling_error_pp.toFixed(1)} pp</small>`:''}${row.ends_at_utc?`<small>Ends ${escapeText(new Date(row.ends_at_utc).toLocaleString())}</small>`:''}</div>`).join('');
+    $('forecast-state').textContent=`Fixed snapshot calculated ${new Date(data.model.as_of_utc).toLocaleString()} · ${data.direction?.toUpperCase() || direction.toUpperCase()} target $${fmt(data.target_price)}. Live prices and news do not change these results. Press Calculate probability for a new snapshot. Week/month daily-origin diagnostics do not establish live intraday-origin calibration. Stress figures are scenarios, not calibrated confidence bounds.`;
+    $('cards').innerHTML = data.horizons.map(row=>`<div class="card"><span>${escapeText(row.label)}</span><strong>${escapeText(probabilityText(row.probability))}</strong>${Number.isFinite(row.sampling_error_pp)&&row.sampling_error_pp>0?`<small>MC ±${row.sampling_error_pp.toFixed(1)} pp</small>`:''}${Number.isFinite(row.stress_probability)?`<small title="Unvalidated temporary risk scenario">Stress scenario ${escapeText(probabilityText(row.stress_probability))}</small>`:''}${row.ends_at_utc?`<small>Ends ${escapeText(new Date(row.ends_at_utc).toLocaleString())}</small>`:''}</div>`).join('');
     $('probability-chart').innerHTML = probabilityChart(data.horizons);
     $('projection-chart').innerHTML = projectionChart(data,Number($('chart-horizon').value));
     $('summary').textContent = `Move to target: ${data.price_change_percent.toFixed(2)}% · Implied ${data.leverage}× return: +${data.leveraged_return_percent.toFixed(2)}% before costs`;
@@ -100,11 +101,34 @@ function render(data) {
         }
 
         const e=data.evidence;
-        $('evidence').textContent=`${e.observations} observed quotes · ${e.news.coverage}/${e.news.sources.length} news feeds available · ${e.news.headlines.length} dated oil headlines. ${e.news.sources.map(s=>s.name+': '+(s.available?'reachable':'unavailable')).join(' · ')}. ${e.validation} ${e.unmodeled}${data.historical_context?' Historical context: '+Object.entries(data.historical_context.series).map(([k,v])=>k+' '+v.count+' daily observations ('+v.first+' to '+v.last+')').join('; ')+'. Daily validation MSE '+data.historical_context.validation.model_mse.toFixed(6)+' versus baseline '+data.historical_context.validation.zero_drift_mse.toFixed(6)+'. Historical directional model NOT promoted.':''}`;
+        $('evidence').textContent=`${e.observations} live observations · ${e.news.coverage}/${e.news.sources.length} news feeds reachable · ${e.news.headlines.length} dated oil headlines. ${e.validation} ${e.unmodeled}`;
 
     }
+    if(data.strategic) renderStrategy(data.strategic);
     $('closed-note').hidden = data.quote.market_open;
     $('closed-note').textContent = 'The market is closed. Horizons with no scheduled trading have no modeled movement. The quote above is the last session price.';
+}
+function renderStrategy(s) {
+    $('strategic-summary').textContent=`${s.observations} daily TVC bars through ${s.last_bar} · ${s.data_status}. 60-day volatility ${(s.annual_volatility_60d*100).toFixed(1)}%; 252-day ${(s.annual_volatility_252d*100).toFixed(1)}%; 20-day return ${s.momentum_20d_percent?.toFixed(1)}%. Central model: ${s.model}. More complex candidates ${s.proxy_validation_promoted?'passed the historical upgrade gate':'did not pass the historical upgrade gate'}.`;
+    const weak=Object.entries(s.validation.horizons || {}).filter(([,v])=>v.baseline_beats_frequency_benchmark===false).map(([h])=>h);
+    if(weak.length) $('strategic-summary').textContent+=` ${weak.join(' / ')} baseline did not outperform the historical-frequency benchmark; improved accuracy is not established.`;
+    const f=s.fundamentals, parts=[];
+    if(f.inventories) parts.push(`EIA crude inventories: ${f.inventories.thousand_barrels.toLocaleString()} thousand barrels; weekly change ${f.inventories.weekly_change.toLocaleString()}; year-on-year ${f.inventories.year_on_year_percent.toFixed(1)}%; week ending ${f.inventories.week_ending}.`);
+    if(f.production) parts.push(`EIA US production: ${f.production.thousand_barrels_per_day.toLocaleString()} thousand barrels/day; four-week change ${f.production.four_week_change_percent.toFixed(1)}%; week ending ${f.production.week_ending}.`);
+    $('strategic-fundamentals').textContent=parts.join(' ')+' Supply figures are dated context and stress inputs; their predictive coefficients were not promoted.';
+    $('strategic-ranges').replaceChildren();
+    for(const r of s.long_term || []) {
+        const p=document.createElement('p');
+        p.textContent=`${r.horizon}: central 10–90% price range $${fmt(r.central_range.low)}–$${fmt(r.central_range.high)}, median $${fmt(r.central_range.median)}. Separate stress range $${fmt(r.stress_range.low)}–$${fmt(r.stress_range.high)}. Lower-tail move ${r.central_downside_percent.toFixed(1)}% (stress ${r.stress_downside_percent.toFixed(1)}%); these are scenarios, not worst-case limits.`;
+        $('strategic-ranges').append(p);
+    }
+    const reports=[];
+    for(const [h,v] of Object.entries(s.validation.horizons || {})) {
+        const m=v.models.baseline;
+        reports.push(`${h}: ${m.origins} non-overlapping daily TVC origins, ${m.cases} target cases; Brier ${m.brier.toFixed(3)} (lower is better)${Number.isFinite(v.development_frequency_benchmark_brier)?`, historical-frequency benchmark ${v.development_frequency_benchmark_brier.toFixed(3)}`:''}, aggregate calibration gap ${(m.ece*100).toFixed(1)} percentage points. This gap is not an error bound for your forecast.`);
+    }
+    $('strategic-validation').textContent=reports.join(' ')+' Development ended before 2019; evaluation begins in 2019. Provider history can be revised. These daily-origin tests do not establish live intraday-origin or hourly calibration. Headline and fundamental stress weights are explicit assumptions, not proven price impacts.';
+    $('strategic-gaps').textContent=s.coverage_gaps.join(' · ')+(s.refresh_error?' · '+s.refresh_error:'');
 }
 async function calculate(event) {
     event?.preventDefault(); if(busy) return;

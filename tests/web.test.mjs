@@ -54,9 +54,10 @@ test('proxy supports the new market and forecast endpoints',async()=>{
  const saved=process.env.OILPBOT_API_URL,nativeFetch=globalThis.fetch;
  try{
   process.env.OILPBOT_API_URL='https://backend.example.com';
-  globalThis.fetch=async(url)=>{assert.match(url.pathname,/\/api\/(market|forecast|news)/);return response(200,{ok:true})};
+  globalThis.fetch=async(url)=>{assert.match(url.pathname,/\/api\/(market|forecast|news|strategy)/);return response(200,{ok:true})};
   assert.equal((await handler({path:'/api/market',httpMethod:'GET'})).statusCode,200);
   assert.equal((await handler({path:'/api/news',httpMethod:'GET'})).statusCode,200);
+  assert.equal((await handler({path:'/api/strategy',httpMethod:'GET'})).statusCode,200);
   assert.equal((await handler({path:'/api/forecast',httpMethod:'POST',body:'{}'})).statusCode,200);
   assert.equal((await handler({path:'/api/unknown',httpMethod:'GET'})).statusCode,404);
   globalThis.fetch=async()=>response(200,'<!doctype html>','text/html');
@@ -195,4 +196,28 @@ test('an old forecast stays visible while the clock and live feed advance',async
  assert.equal(get('cards').innerHTML,before);
  assert.equal(calls,1);
  assert.match(get('forecast-state').textContent,/Fixed snapshot/);
+});
+
+test('strategic panel distinguishes daily-origin validation and unvalidated risk scenarios',async()=>{
+ const data=fixture();
+ data.horizons[0].stress_probability=.2;
+ data.strategic={observations:4231,last_bar:'2026-10-23',data_status:'current daily proxy',annual_volatility_60d:.4,annual_volatility_252d:.3,momentum_20d_percent:2,model:'baseline',proxy_validation_promoted:false,
+  fundamentals:{inventories:{thousand_barrels:412517,weekly_change:-3060,year_on_year_percent:2,week_ending:'2026-10-16'}},
+  long_term:[{horizon:'1 week',central_range:{low:90,median:100,high:110},stress_range:{low:85,high:115},central_downside_percent:-10,stress_downside_percent:-15}],
+  validation:{horizons:{'1 week':{models:{baseline:{origins:392,cases:2352,brier:.187,ece:.025}}}}},coverage_gaps:['Exact TVC touch calibration unavailable']};
+ const {api,get}=ui(async()=>response(200,data));await flush();await api.calculate();
+ assert.match(get('cards').innerHTML,/Stress scenario 20.0%/);
+ assert.match(get('strategic-summary').textContent,/4231 daily TVC/);
+ assert.match(get('strategic-fundamentals').textContent,/EIA crude inventories/);
+ assert.match(get('strategic-validation').textContent,/392 non-overlapping/);
+ assert.match(get('strategic-validation').textContent,/not an error bound/);
+ assert.match(get('strategic-ranges').children[0].textContent,/stress -15.0%/);
+});
+
+
+test('tiny and near-certain model estimates are not rounded into certainty',async()=>{
+ const data=fixture();data.horizons[0].probability=.0001;data.horizons[1].probability=.9999;
+ const {api,get}=ui(async()=>response(200,data));await flush();await api.calculate();
+ assert.match(get('cards').innerHTML,/&lt;0.1%/);
+ assert.match(get('cards').innerHTML,/&gt;99.9%/);
 });
