@@ -20,6 +20,7 @@ from src.news import RawHeadline, NewsRiskAdjuster
 
 SOURCES = {'BBC World': 'https://feeds.bbci.co.uk/news/world/rss.xml',
            'EIA energy': 'https://www.eia.gov/rss/todayinenergy.xml',
+           'OilPrice': 'https://oilprice.com/rss/main',
            'Google News oil search': 'https://news.google.com/rss/search?' + urlencode({
                'q':'(oil OR crude OR OPEC OR Hormuz OR \"energy supply\") when:1d',
                'hl':'en-US','gl':'US','ceid':'US:en'})}
@@ -27,6 +28,7 @@ _lock = threading.Lock()
 _cache = None
 _until = 0
 _checked_at = None
+_source_errors = {}
 NEWS_REFRESH_SECONDS = 60
 NEWS_MAX_AGE_SECONDS = 86400
 
@@ -84,9 +86,14 @@ def news_context(now):
                             continue
                         items.append(RawHeadline(title=title, source=(node.findtext('source') or name).strip(), published_utc=published,
                                                  url=url, summary=node.findtext('description') or ''))
+                    _source_errors.pop(name, None)
                     return name, [h for h in items if 0 <= (now-h.published_utc).total_seconds() <= NEWS_MAX_AGE_SECONDS
                                   and headline_priority(h,now)[0] > 0], True
-                except Exception:
+                except Exception as exc:
+                    _source_errors[name] = ('HTTP ' + str(exc.response.status_code) if isinstance(exc, httpx.HTTPStatusError)
+                                            else 'Request timed out' if isinstance(exc, httpx.TimeoutException)
+                                            else 'Invalid RSS' if isinstance(exc, (ET.ParseError, ValueError))
+                                            else 'Connection unavailable')
                     previous = next((items for source, items, _ in (_cache or []) if source == name), [])
                     return name, previous, False
             with ThreadPoolExecutor(max_workers=len(SOURCES)) as pool:
@@ -107,7 +114,7 @@ def news_context(now):
                 headlines.append(h)
         adjuster.ingest_headlines(headlines)
         adjustment = adjuster.compute_adjustment(now)
-        return {'sources': [{'name':name,'url':SOURCES[name],'available':ok} for name,_,ok in _cache],
+        return {'sources': [{'name':name,'url':SOURCES[name],'available':ok,'error':_source_errors.get(name)} for name,_,ok in _cache],
                 'coverage':sum(ok for _,_,ok in _cache),
                 'drivers':[{'title':d.title,'event_type':d.event_type,'impact':d.effective_impact} for d in adjustment.drivers[:5]],
                 'headlines':[{'title':h.title,'url':h.url,'source':h.source,
