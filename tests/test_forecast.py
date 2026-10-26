@@ -71,35 +71,27 @@ def test_daily_break_and_dst_are_accounted_for():
     assert forecast.market_open(datetime(2026,11,1,23,0,tzinfo=timezone.utc))
 
 
-def test_feed_caching_backoff_and_recovery(monkeypatch):
-    calls=[];clock=[1000.];fail=[False]
-    def get(*args,**kwargs):
-        calls.append(1)
-        if fail[0]: raise httpx.ConnectError('private detail')
-        return httpx.Response(200,text=page(),request=httpx.Request('GET',forecast.SOURCE_URL))
-    monkeypatch.setattr(forecast.httpx,'get',get)
-    monkeypatch.setattr(forecast.time,'monotonic',lambda:clock[0])
-    feed=forecast.OilFeed()
+def test_feed_uses_live_source_price_and_timestamp(monkeypatch):
+    class Source:
+        last_error = None
+        def get(self):
+            return SNAP
+    monkeypatch.setattr('src.intelligence.history', lambda snapshot: [])
+    source=Source()
+    feed=forecast.OilFeed(source)
     assert feed.get()==SNAP
-    assert feed.get()==SNAP and len(calls)==1
-    clock[0]+=9
-    assert feed.get()==SNAP and len(calls)==1
-    clock[0]+=1
-    assert feed.get()==SNAP and len(calls)==2
-    clock[0]+=10;fail[0]=True
-    assert feed.get()==SNAP and len(calls)==3
-    assert feed.last_error=='Oil source unavailable or quote format changed'
-    feed.get();assert len(calls)==3
-    clock[0]+=31;fail[0]=False
-    assert feed.get()==SNAP and len(calls)==4 and feed.last_error is None
+    source.last_error='Reconnecting'
+    assert feed.last_error=='Reconnecting'
 
 
-def test_no_feed_gives_explicit_503(monkeypatch):
-    def fail(*args,**kwargs): raise httpx.ConnectError('not public')
-    monkeypatch.setattr(forecast.httpx,'get',fail)
-    with pytest.raises(HTTPException) as error: forecast.OilFeed().get()
+def test_no_stream_gives_explicit_503():
+    class Source:
+        last_error = None
+        def get(self):
+            raise RuntimeError('private network details')
+    with pytest.raises(HTTPException) as error: forecast.OilFeed(Source()).get()
     assert error.value.status_code==503
-    assert 'not public' not in error.value.detail
+    assert 'private' not in error.value.detail
 
 
 def test_endpoints_and_minimal_inputs(monkeypatch):
@@ -119,3 +111,22 @@ def test_endpoints_and_minimal_inputs(monkeypatch):
             assert client.post('/api/forecast',json=payload).status_code==422
         assert 'Price data mode' not in client.get('/').text
         assert client.get('/app.js').status_code==200
+
+
+def test_browser_stream_uses_same_price_and_timestamp(monkeypatch):
+    class Source:
+        latest=SNAP
+        last_error=None
+        def start(self): pass
+    monkeypatch.setattr(forecast.feed,'stream',Source())
+    with TestClient(app) as client:
+        with client.websocket_connect('/api/live') as socket:
+            quote=socket.receive_json()['quote']
+            assert quote['price']==SNAP.price
+            assert quote['timestamp_utc']==SNAP.timestamp.isoformat()
+            assert quote['source']=='TradingView widget quote stream'
+
+
+def test_live_reference_rejects_more_than_two_minutes_old():
+    assert forecast.quote_payload(replace(SNAP,timestamp=NOW-timedelta(seconds=120)),NOW)['usable']
+    assert not forecast.quote_payload(replace(SNAP,timestamp=NOW-timedelta(seconds=121)),NOW)['usable']

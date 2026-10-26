@@ -12,7 +12,7 @@ function ui(fetchForecast){
  const get=id=>elements[id]??=( {value:id==='leverage'?'5':id==='target'?'78':id==='chart-horizon'?'168':'',textContent:'',innerHTML:'',hidden:false,dataset:{},disabled:false,events:{},children:[],append(...nodes){this.children.push(...nodes)},replaceChildren(){this.innerHTML='';this.children=[]},addEventListener(type,fn){this.events[type]=fn},setAttribute(key,value){this[key]=value}} );
  const context=vm.createContext({document:{getElementById:get,createElement:()=>({textContent:'',children:[],append(...nodes){this.children.push(...nodes)}})},fetch:async(path,options)=>path==='/api/market'?(marketRequests.push(options),response(200,{quote:spot})):path==='/api/news'?response(200,{sources:[],headlines:[]}):fetchForecast(path,options),AbortSignal,Date,console,setTimeout:(fn,ms)=>{timers.push({fn,ms});return 0},setInterval:()=>0});
  vm.runInContext(script,context);
- const api=vm.runInContext('({calculate,render,clearResults,projectionChart,renderNews,refreshNews})',context);
+ const api=vm.runInContext('({calculate,render,clearResults,projectionChart,renderNews,refreshNews,applyQuote,connectQuotes})',context);
  return {get,api,context,timers,marketRequests};
 }
 const fixture=()=>({quote:spot,target_price:78,price_change_percent:4,leverage:5,leveraged_return_percent:20,horizons:[1,3,5,24,168].map((hours,i)=>({hours,label:['1 hour','3 hours','5 hours','1 day','1 week'][i],probability:.1*i})),projection:Array.from({length:169},(_,hours)=>({hours,median:75,low:74-hours/100,high:76+hours/100})),model:{basis:'Range model',as_of_utc:new Date().toISOString()}});
@@ -76,28 +76,29 @@ test('projection uses local date/time ticks and interpolated crossing marker',()
 });
 
 
-test('quotes poll every ten seconds without browser caching or redundant forecasts',async()=>{
+test('quotes poll every two seconds without browser caching or redundant forecasts',async()=>{
  let forecasts=0;
  const {api,timers,marketRequests}=ui(async()=>{forecasts++;return response(200,fixture())});
  await flush();
- assert.equal(timers.findLast(t=>t.ms===10000).ms,10000);
+ assert.equal(timers.findLast(t=>t.ms===2000).ms,2000);
  assert.equal(marketRequests[0].cache,'no-store');
  await api.calculate();
- await timers.findLast(t=>t.ms===10000).fn();
+ await timers.findLast(t=>t.ms===2000).fn();
  assert.equal(forecasts,1);
- assert.equal(timers.findLast(t=>t.ms===10000).ms,10000);
+ assert.equal(timers.findLast(t=>t.ms===2000).ms,2000);
 });
 
 test('a changed quote recalculates the forecast and an unusable quote clears it',async()=>{
  let forecasts=0;
- const {api,get,timers}=ui(async()=>{forecasts++;return response(200,fixture())});
+ const {api,get,timers,context}=ui(async()=>{forecasts++;return response(200,fixture())});
  await flush();await api.calculate();
  try {
   spot.price=75.5;
-  await timers.findLast(t=>t.ms===10000).fn();await flush();
+  vm.runInContext('lastForecastRefresh=0',context);
+  await timers.findLast(t=>t.ms===2000).fn();await flush();
   assert.equal(forecasts,2);
   spot.usable=false;
-  await timers.findLast(t=>t.ms===10000).fn();
+  await timers.findLast(t=>t.ms===2000).fn();
   assert.doesNotMatch(get('cards').innerHTML,/40.0%/);
   assert.equal(forecasts,2);
  } finally {spot.price=75;spot.usable=true;}
@@ -116,9 +117,30 @@ test('independent news remains visible when forecasts are cleared',async()=>{
  assert.ok(timers.some(t=>t.ms===60000));
 });
 
-test('official quote widget requests the exact TVC instrument and labels the backend reference',()=>{
+test('native live price display avoids an unreadable external widget',()=>{
  const html=readFileSync(new URL('../templates/index.html',import.meta.url),'utf8');
- assert.match(html,/https:\/\/s3.tradingview.com\/external-embedding\/embed-widget-single-quote.js/);
- assert.match(html,/"symbol":"TVC:USOIL"/);
- assert.match(html,/Forecast reference quote/);
+ assert.match(html,/Live oil price and forecast reference/);
+ assert.match(html,/TVC:USOIL · live oil price/);
+ assert.doesNotMatch(html,/embed-widget-single-quote.js/);
+});
+
+test('browser quote socket immediately applies a provider update',async()=>{
+ const {context,get,api}=ui(async()=>response(200,fixture()));
+ await flush();
+ let socket;
+ context.location={protocol:'https:',host:'oilpbot.onrender.com'};
+ context.WebSocket=class { constructor(url){assert.equal(url,'wss://oilpbot.onrender.com/api/live');socket=this} };
+ api.connectQuotes();
+ socket.onmessage({data:JSON.stringify({quote:{...spot,price:76.25}})});
+ assert.equal(get('price').textContent,'$76.25');
+});
+
+
+test('out-of-order HTTP responses cannot overwrite newer streamed prices',async()=>{
+ const {api,get}=ui(async()=>response(200,fixture()));
+ await flush();
+ const latest=new Date(Date.now()+1000).toISOString();
+ api.applyQuote({quote:{...spot,price:76.25,timestamp_utc:latest,checked_at_utc:latest}});
+ api.applyQuote({quote:{...spot,price:74.5,checked_at_utc:new Date().toISOString(),usable:false}});
+ assert.equal(get('price').textContent,'$76.25');
 });

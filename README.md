@@ -10,25 +10,23 @@ There are no user inputs for OVX, required return, or data mode.
 
 ## Data and model
 
-- The main price display embeds TradingView's official free Single Ticker widget for
-  **TVC:USOIL**, receiving provider updates directly in the visitor's browser. No API
-  key is needed. Provider availability, market hours, entitlements and delays still
-  apply; zero-latency or tick-for-tick delivery is not guaranteed. The widget is a
-  display, not a backend quote API.
-- Forecast calculations separately use the exact **TVC:USOIL** public snapshot:
-  https://www.tradingview.com/symbols/TVC-USOIL/ . This is not Nasdaq's oil futures
-  listing or a Nasdaq-listed security. The interface credits the actual source and
-  shows its timestamp. It never substitutes USO ETF or futures prices silently.
-- Price and timestamp are extracted together from the same daily bar in the page's
-  structured data. This public-page format is not a guaranteed API; failures or
-  changed formats cause an explicit unavailable state, not invented prices.
-- The browser checks quotes every 10 seconds, bypassing browser caches. The server
-  fetches at most once every 10 seconds per process and shares requests across users; errors trigger exponential
-  backoff capped at five minutes. Concurrent requests share the cache. Unchanged quotes do not trigger another
-  expensive forecast calculation. This is free public-page polling, not a guaranteed
-  live tick feed: TradingView may return a cached or delayed snapshot. Faster polling
-  cannot remove upstream delays; the source timestamp and stale-data guards remain authoritative.
-- During scheduled trading, quotes older than 15 minutes are refused automatically.
+- The app displays the exact **TVC:USOIL** price received by its backend. It no
+  longer embeds a separate widget that can be blank or inaccessible to forecast code.
+- The backend connects to TradingView's public widget quote WebSocket for the exact
+  **TVC:USOIL** instrument. It uses the source's last price, quote timestamp and
+  session high/low; the stale public-page scrape is no longer used in production.
+  One shared connection per process receives updates and reconnects with bounded
+  exponential backoff (1–30 seconds). No login, API key or paid service is required.
+  This public widget protocol is unofficial and may change or become unavailable;
+  it is not a supported backend data-service contract. The app never replaces it
+  silently with another instrument or invents a current timestamp.
+- Both forecast calculations and `/api/market` use that shared stream. The browser
+  receives updates through `/api/live` WebSocket, with two-second HTTP polling as
+  fallback (including hosts that cannot proxy WebSockets). A separate TradingView website or widget connection can differ briefly due to
+  transport latency. No zero-delay
+  guarantee is possible. Active forecasts refresh at most once every 15 seconds
+  without clearing the charts; their own reference price and timestamp remain visible.
+- During scheduled trading, quotes older than two minutes are refused automatically.
   During closures, the latest close is accepted only if no more than 15 minutes of
   scheduled trading have elapsed since its timestamp (and it is under 96 hours old).
   The UI explicitly labels it **Market closed · last session quote**.
@@ -58,11 +56,10 @@ python -m venv .venv
 Open the host running the app on port 8000. The same FastAPI service serves the HTML,
 JavaScript, charts and API. No API key or environment-variable setup is needed for the
 main TVC app. SQLite needs a writable path; `SQLITE_DB_PATH` optionally changes it.
-The forecast UI has no external chart, CSS or font dependencies. The price widget
-loads TradingView's official external script and iframe; ad blockers, CSP or network
-policies can block it. A source link remains available if it fails. Backend snapshots
-may lag the widget; the separate forecast reference quote shows the exact timestamp
-used for calculations. The widget does not make stale backend data current.
+The frontend has no external JavaScript, CSS, chart, font or widget dependencies.
+The backend subscribes to the public widget quote service; the frontend receives
+that same data through its own server. The exact forecast reference price and source
+timestamp are shown alongside the model, and stale quotes are rejected.
 
 ## Deploy on Render
 
@@ -81,7 +78,9 @@ in Netlify to the backend HTTPS origin. The Node function forwards `/api/market`
 
 - `GET /api/news`: independently refreshed, dated oil news and per-source availability.
   News remains visible even when quotes or forecasts are unavailable.
-- `GET /api/market`: timestamped TVC:USOIL quote, automatic freshness/closure status.
+- `GET /api/market`: timestamped TVC:USOIL streaming quote, automatic freshness/closure status.
+- `WS /api/live`: pushes timestamped quote updates to browsers without creating a
+  separate upstream connection per visitor. HTTP polling remains the fallback.
 - `POST /api/forecast`: `{ "target_price": 105, "direction": "long", "leverage": 5 }`.
   Returns six horizon estimates, projection points, model assumptions, underlying
   move and implied leveraged return. Invalid inputs return 422, unavailable data 503.
@@ -124,7 +123,9 @@ price direction. Feed availability and actual headlines are visible under Eviden
 This limited rule-based coverage is not comprehensive geopolitical intelligence.
 There are no new paid services, API keys, AI providers, or AIS subscriptions.
 
-Distinct TVC quote observations accumulate in SQLite when the source refreshes.
+Distinct TVC quote observations accumulate in the selected database when market
+requests are served. The model reads the latest quote per minute over up to 1,000
+minutes, so dense live ticks do not shrink its four-hour volatility warmup window.
 After at least 20 return intervals spanning four trading hours, empirical volatility
 is blended with session-range volatility. Shrunk momentum is used only when its
 approximate sampling interval excludes zero. Sparse observations are not minute bars;
@@ -219,19 +220,17 @@ coverage and rerun validation before publishing a changed archive.
 ## Network access for development and deployment
 
 Allow outbound HTTPS to `feeds.bbci.co.uk` and `www.eia.gov` for server-side RSS,
-and `www.tradingview.com` for the backend reference snapshot. The official browser
-widget loads from `s3.tradingview.com` and `www.tradingview-widget.com`; TradingView
-may also use `widgets.tradingview-widget.com` and `data.tradingview.com` for its
-widget infrastructure. Browser testing also identified
-`widget-sheriff.tradingview-widget.com` (widget permissions) and
-`widgetdata.tradingview.com` (secure WebSocket quotes). These connections must work
-for the widget to populate; allowing only its script host is insufficient. Browser network/CSP settings must allow the provider's scripts,
-frames and connections. Keep TLS verification enabled. A cloud environment's egress
-settings do not change Render/Netlify or visitors' browser settings.
+and secure WebSockets to `widgetdata.tradingview.com` for backend quotes. Keep TLS
+verification enabled. A cloud environment's egress settings do not change Render or
+visitors' browser settings. Allow `oilpbot.onrender.com` in the cloud network policy
+when checking that deployment.
 
 Check `/api/news` for reachable sources and dated articles, and `/api/market` for
 reference timestamp and usability. A reachable feed may have no new oil articles;
-EIA does not publish continuously. Confirm the widget actually shows TVC:USOIL and
-updates in a real browser before claiming live-price readiness. Its cross-origin
-price cannot be read into the forecasting backend. A stale reference still returns
-503 for forecasts; no alternate instrument or invented timestamp is substituted.
+EIA does not publish continuously. Confirm `/api/live` sends advancing source quote
+timestamps and that both long/short forecasts return six horizons in a real browser.
+The backend directly subscribes to public widget quotes rather than reading an
+iframe. A stale reference still returns 503 for forecasts; no alternate instrument
+or invented timestamp is substituted. The app uses one upstream stream per process,
+not one per browser. Free Render instances still sleep when idle; stream collection
+cannot continue while the instance is asleep. No paid add-on is needed.

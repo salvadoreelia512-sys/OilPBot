@@ -64,7 +64,7 @@ SCHEMA = [
 def record_quote(snapshot):
     with connect() as db:
         db.execute('INSERT INTO tvc_observations(ts,price) VALUES (?,?) ON CONFLICT(ts) DO NOTHING', (snapshot.timestamp.timestamp(), snapshot.price))
-        rows = db.execute('SELECT ts,price FROM tvc_observations WHERE ts<=? ORDER BY ts DESC LIMIT 1000', (snapshot.timestamp.timestamp(),)).fetchall()
+        rows = db.execute('SELECT ts,price FROM tvc_observations WHERE ts IN (SELECT MAX(ts) FROM tvc_observations WHERE ts<=? GROUP BY CAST(ts AS BIGINT) / 60 ORDER BY MAX(ts) DESC LIMIT 1000) ORDER BY ts DESC', (snapshot.timestamp.timestamp(),)).fetchall()
     return rows[::-1]
 
 

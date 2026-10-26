@@ -61,3 +61,15 @@ def test_statistics_failure_is_safe_json(monkeypatch):
     assert response.status_code==503
     assert 'postgresql://' not in response.text
     assert 'DATABASE_URL' in response.json()['detail']
+
+
+def test_tick_history_keeps_four_hour_window_for_volatility(database):
+    # A dense stream must not reduce the 1,000-observation model window to minutes.
+    now=datetime(2026,10,26,12,tzinfo=timezone.utc)
+    rows=[((now-timedelta(seconds=6*i)).timestamp(),75+i*.0001) for i in range(3000)]
+    with storage.connect() as db:
+        db.executemany('INSERT INTO tvc_observations(ts,price) VALUES (?,?)',rows)
+    history=storage.record_quote(OilSnapshot(75,now,76,74))
+    assert len(history)<=1000
+    assert history[-1][0]-history[0][0]>4*3600
+    assert len({int(ts)//60 for ts,_ in history})==len(history)

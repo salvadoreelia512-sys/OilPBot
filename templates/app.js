@@ -1,6 +1,6 @@
 /* No external JavaScript dependencies; charts are rendered as accessible SVG. */
 const $ = id => document.getElementById(id);
-let direction = 'long', result = null, quote = null, busy = false, generation = 0;
+let direction = 'long', result = null, quote = null, busy = false, generation = 0, lastForecastRefresh = 0;
 const fmt = value => Number(value).toFixed(2);
 const labels = ['1 hour', '3 hours', '5 hours', '1 day', '1 week', '1 month'];
 const escapeText = value => String(value).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -26,11 +26,11 @@ function clearResults() {
 }
 function showQuote(value) {
     if (!Number.isFinite(value.price) || !Number.isFinite(Date.parse(value.timestamp_utc))) throw new Error('The source returned an invalid quote.');
-    if (quote && Date.parse(value.checked_at_utc) < Date.parse(quote.checked_at_utc)) return;
+    if (quote && (Date.parse(value.checked_at_utc) < Date.parse(quote.checked_at_utc) || Date.parse(value.timestamp_utc) < Date.parse(quote.timestamp_utc))) return false;
     quote = value;
     $('price').textContent = '$' + fmt(value.price);
-    const age = Math.max(0, Math.round((Date.now() - Date.parse(value.timestamp_utc))/60000));
-    $('quote-time').textContent = 'Quote: ' + new Date(value.timestamp_utc).toLocaleString() + ` · ${age} min old · checking every 10 seconds`;
+    const age = Math.max(0, Math.round((Date.now() - Date.parse(value.timestamp_utc))/1000));
+    $('quote-time').textContent = 'Quote: ' + new Date(value.timestamp_utc).toLocaleString() + ` · ${age} sec old · streaming, with automatic reconnect`;
     const status = {fresh:'Recent quote', delayed:'Delayed quote · checked automatically', market_closed:'Market closed · last session quote', unavailable:'Quote too old · waiting for an update'};
     $('status').textContent = status[value.status] || 'Quote unavailable';
     $('status').dataset.status = value.status;
@@ -84,7 +84,7 @@ function render(data) {
     $('probability-chart').innerHTML = probabilityChart(data.horizons);
     $('projection-chart').innerHTML = projectionChart(data,Number($('chart-horizon').value));
     $('summary').textContent = `Move to target: ${data.price_change_percent.toFixed(2)}% · Implied ${data.leverage}× return: +${data.leveraged_return_percent.toFixed(2)}% before costs`;
-    $('model-note').textContent = data.model.basis + '. ' + (data.model.delay_notice || 'A model range is not the actual future path.');
+    $('model-note').textContent = `Forecast reference: $${fmt(data.quote.price)} at ${new Date(data.quote.timestamp_utc).toLocaleString()}. ` + data.model.basis + '. ' + (data.model.delay_notice || 'A model range is not the actual future path.');
     if(data.outlook){
         const o=data.outlook;
         $('outlook').textContent=`Recommended action: ${o.action.toUpperCase()}${o.target_price?' · '+o.horizon+' · target $'+fmt(o.target_price):''} · ${o.leverage}× reference. ${o.reason}${o.conditional_setups?' Watch only: '+o.conditional_setups.map(s=>s.direction.toUpperCase()+' trigger $'+fmt(s.trigger)+' → target $'+fmt(s.target)).join('; ')+'. '+o.setup_notice:''}`;
@@ -95,31 +95,42 @@ function render(data) {
     $('closed-note').hidden = data.quote.market_open;
     $('closed-note').textContent = 'The market is closed. Horizons with no scheduled trading have no modeled movement. The quote above is the last session price.';
 }
-async function calculate(event) {
+async function calculate(event, background = false) {
     event?.preventDefault(); if(busy) return;
     const id = ++generation;
     const target = Number($('target').value), leverage = Number($('leverage').value);
-    clearResults(); setError('');
+    if(!background) clearResults();
+    setError('');
     if(!Number.isFinite(target) || target<=0 || target>1000000 || leverage<1 || leverage>100){setError('Enter a valid positive target and leverage from 1× to 100×.');return;}
     busy=true; $('submit').disabled=true; $('submit').textContent='Calculating…';
     try {
         const data=await api('/api/forecast',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({target_price:target,direction,leverage})});
-        if(id===generation) render(data);
+        if(id===generation) {render(data);lastForecastRefresh=Date.now();}
     } catch(error){ if(id===generation) setError(error.message); }
     finally {busy=false; $('submit').disabled=false; $('submit').textContent='Calculate probability';}
 }
+function applyQuote(data) {
+    const previous = result?.quote || quote;
+    const changed = !previous || data.quote.price !== previous.price || data.quote.timestamp_utc !== previous.timestamp_utc;
+    if(showQuote(data.quote)===false) return;
+    if(!data.quote.usable) clearResults();
+    else if(changed && result && !busy && Date.now()-lastForecastRefresh>=15000) calculate(undefined,true);
+    if(data.source_warning) setError('Source connection interrupted; showing the last verified quote.');
+}
 async function refreshQuote() {
-    try {
-        const data=await api('/api/market');
-        const previous = result?.quote || quote;
-        const changed = !previous || data.quote.price !== previous.price || data.quote.timestamp_utc !== previous.timestamp_utc;
-        showQuote(data.quote);
-        if(!data.quote.usable) clearResults();
-        else if(changed && result && !busy) calculate();
-        if(data.source_warning) setError('Source refresh failed; showing the last verified snapshot.');
-    }
+    try { applyQuote(await api('/api/market')); }
     catch(error){ $('status').textContent='Source unavailable · retry shortly'; if(!quote) setError(error.message); }
-    finally {setTimeout(refreshQuote,10000);}
+    finally {setTimeout(refreshQuote,2000);}
+}
+function connectQuotes() {
+    if(typeof WebSocket === 'undefined') return;
+    const socket = new WebSocket(`${location.protocol==='https:'?'wss:':'ws:'}//${location.host}/api/live`);
+    socket.onmessage = event => {
+        try { applyQuote(JSON.parse(event.data)); }
+        catch { $('status').textContent='Invalid quote update · retrying automatically'; }
+    };
+    socket.onclose = () => setTimeout(connectQuotes,15000);
+    socket.onerror = () => socket.close();
 }
 for(const side of ['long','short']) $(''+side).addEventListener('click',()=>{direction=side;generation++;clearResults();$('long').setAttribute('aria-pressed',String(side==='long'));$('short').setAttribute('aria-pressed',String(side==='short'));});
 $('target').addEventListener('input',()=>{generation++;clearResults();});
@@ -128,7 +139,7 @@ $('chart-horizon').addEventListener('change',()=>{if(result)$('projection-chart'
 $('forecast-form').addEventListener('submit',calculate);
 setInterval(()=>{
     if(result && Date.now()-Date.parse(result.model.as_of_utc)>180000) clearResults();
-    if(quote && quote.market_open && Date.now()-Date.parse(quote.timestamp_utc)>900000){$('status').textContent='Quote too old · waiting for an update';clearResults();}
+    if(quote && quote.market_open && Date.now()-Date.parse(quote.timestamp_utc)>120000){$('status').textContent='Quote too old · waiting for an update';clearResults();}
 },1000);
 function renderNews(data) {
     const available = data.sources.filter(s=>s.available).length;
@@ -154,4 +165,5 @@ async function refreshNews() {
     finally { setTimeout(refreshNews,60000); }
 }
 refreshNews();
+connectQuotes();
 refreshQuote();

@@ -1,24 +1,21 @@
 """Exact TVC:USOIL snapshots and transparent multi-horizon GBM estimates."""
 import json
 import math
-import threading
-import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from html.parser import HTMLParser
 from typing import Literal
 from zoneinfo import ZoneInfo
 
-import httpx
 import numpy as np
-from fastapi import APIRouter, HTTPException, Response
+from fastapi import APIRouter, HTTPException, Response, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field
 from scipy.special import ndtri
 
 from src.simulation import closed_form_barrier_touch_prob
 
 SOURCE_URL = "https://www.tradingview.com/symbols/TVC-USOIL/"
-QUOTE_REFRESH_SECONDS = 10
+MAX_QUOTE_AGE_SECONDS = 120
 NY = ZoneInfo("America/New_York")
 HORIZONS = [("1 hour", 1), ("3 hours", 3), ("5 hours", 5), ("1 day", 24), ("1 week", 168)]
 
@@ -106,35 +103,23 @@ def parse_snapshot(html):
 
 
 class OilFeed:
-    def __init__(self):
-        self.lock = threading.Lock()
-        self.snapshot = None
-        self.next_attempt = 0.0
-        self.failures = 0
-        self.last_error = None
+    def __init__(self, source=None):
+        from src.live_quotes import stream
+        self.stream = source if source is not None else stream
+
+    @property
+    def last_error(self):
+        return self.stream.last_error
 
     def get(self):
-        with self.lock:
-            if time.monotonic() >= self.next_attempt:
-                try:
-                    response = httpx.get(SOURCE_URL, headers={"User-Agent": "OilPBot/0.7", "Accept": "application/json,text/html", "Cache-Control": "no-cache"}, timeout=8, follow_redirects=True)
-                    response.raise_for_status()
-                    snapshot = parse_snapshot(response.text)
-                    if (snapshot.timestamp - datetime.now(timezone.utc)).total_seconds() > 60:
-                        raise ValueError("Source timestamp is in the future")
-                    self.snapshot = snapshot
-                    self.failures = 0
-                    self.last_error = None
-                    self.next_attempt = time.monotonic() + QUOTE_REFRESH_SECONDS
-                except Exception as exc:
-                    self.failures += 1
-                    self.next_attempt = time.monotonic() + min(300, 30 * 2 ** min(self.failures - 1, 4))
-                    self.last_error = "Oil source rate limited requests" if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 429 else "Oil source unavailable or quote format changed"
-            if self.snapshot is None:
-                raise HTTPException(status_code=503, detail=self.last_error or "Oil quote is not available yet. Retry shortly.")
-            from src.intelligence import history
-            history(self.snapshot)
-            return self.snapshot
+        try:
+            quote = self.stream.get()
+        except RuntimeError:
+            raise HTTPException(status_code=503, detail="Live TVC:USOIL quotes unavailable; reconnecting automatically. Retry shortly.") from None
+        snapshot = OilSnapshot(quote.price, quote.timestamp, quote.high, quote.low)
+        from src.intelligence import history
+        history(snapshot)
+        return snapshot
 
 
 feed = OilFeed()
@@ -151,10 +136,10 @@ class ForecastRequest(BaseModel):
 def quote_payload(snapshot, now):
     age = max(0, (now - snapshot.timestamp).total_seconds())
     active_age = trading_hours(snapshot.timestamp, now)
-    usable = age <= 900 or (age <= 96 * 3600 and active_age <= .25 and not market_open(now))
+    usable = age <= MAX_QUOTE_AGE_SECONDS or (age <= 96 * 3600 and active_age <= .25 and not market_open(now))
     return {
         "symbol": "TVC:USOIL", "name": "WTI crude oil", "price": snapshot.price,
-        "source": "TradingView public snapshot", "source_url": SOURCE_URL,
+        "source": "TradingView widget quote stream", "source_url": SOURCE_URL,
         "timestamp_utc": snapshot.timestamp.isoformat(), "age_seconds": round(age),
         "market_open": market_open(now), "usable": usable,
         "status": ("market_closed" if not market_open(now) else "fresh" if age <= 60 else "delayed") if usable else "unavailable",
@@ -216,6 +201,31 @@ def market(response: Response):
     response.headers["Cache-Control"] = "no-store"
     return {"quote": quote_payload(feed.get(), datetime.now(timezone.utc)),
             "source_warning": feed.last_error}
+
+
+@router.websocket("/api/live")
+async def live_market(socket: WebSocket):
+    import asyncio
+    await socket.accept()
+    feed.stream.start()
+    previous = None
+    try:
+        while True:
+            current = feed.stream.latest
+            if current is not None and current != previous:
+                snapshot = OilSnapshot(current.price, current.timestamp, current.high, current.low)
+                await socket.send_json({"quote": quote_payload(snapshot, datetime.now(timezone.utc)),
+                                        "source_warning": feed.last_error})
+                previous = current
+            # Yield while waiting; one upstream connection serves every visitor.
+            try:
+                message = await asyncio.wait_for(socket.receive(), timeout=.25)
+                if message["type"] == "websocket.disconnect":
+                    break
+            except asyncio.TimeoutError:
+                pass
+    except WebSocketDisconnect:
+        pass
 
 
 @router.get("/api/news")

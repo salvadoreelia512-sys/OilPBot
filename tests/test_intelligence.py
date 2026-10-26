@@ -111,3 +111,16 @@ def test_failed_news_retries_quickly_and_recovers_independently_of_quotes(monkey
         assert response.status_code==200
         assert response.headers['cache-control']=='no-store'
         assert response.json()['coverage']==2
+
+
+def test_neutral_monte_carlo_matches_exact_barrier_probabilities():
+    # Checks numerical correctness under known GBM assumptions, not market accuracy.
+    import math
+    from src.simulation import closed_form_barrier_touch_prob
+    for direction in ['long','short']:
+        forecast=run(direction)
+        sigma=forecast['model']['annual_volatility']
+        for horizon in forecast['horizons']:
+            expected=closed_form_barrier_touch_prob(S.price,forecast['target_price'],sigma,horizon['trading_hours']/(252*23))
+            error=4*math.sqrt(expected*(1-expected)/12000)+.002
+            assert abs(horizon['probability']-expected)<=error
