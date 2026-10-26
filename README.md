@@ -222,7 +222,10 @@ Allow outbound HTTPS to `feeds.bbci.co.uk` and `www.eia.gov` for server-side RSS
 and `www.tradingview.com` for the backend reference snapshot. The official browser
 widget loads from `s3.tradingview.com` and `www.tradingview-widget.com`; TradingView
 may also use `widgets.tradingview-widget.com` and `data.tradingview.com` for its
-widget infrastructure. Browser network/CSP settings must allow the provider's scripts,
+widget infrastructure. Browser testing also identified
+`widget-sheriff.tradingview-widget.com` (widget permissions) and
+`widgetdata.tradingview.com` (secure WebSocket quotes). These connections must work
+for the widget to populate; allowing only its script host is insufficient. Browser network/CSP settings must allow the provider's scripts,
 frames and connections. Keep TLS verification enabled. A cloud environment's egress
 settings do not change Render/Netlify or visitors' browser settings.
 
