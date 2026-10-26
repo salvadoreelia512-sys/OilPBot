@@ -7,7 +7,7 @@ import hashlib
 import secrets
 import time
 import json
-from datetime import date, datetime, timezone, timedelta
+from datetime import date, datetime, timezone, timedelta, time as clocktime
 from pathlib import Path
 
 import httpx
@@ -55,7 +55,8 @@ def fetch_daily(path):
 
 
 def build(refresh=False, destination=DEST):
-    end = datetime.now(timezone.utc).date().isoformat()
+    built_at = datetime.now(timezone.utc)
+    end = built_at.date().isoformat()
     price_path = Path('/tmp/oilpbot-tvc-daily-source.json')
     if refresh or not price_path.exists():
         fetch_daily(price_path)
@@ -71,7 +72,8 @@ def build(refresh=False, destination=DEST):
         day=(opened.date()+timedelta(days=1)).isoformat()
         values={key:float(value) for key,value in zip(('open','high','low','close'),raw[1:5])}
         # Never use the still-open current session, even if the provider returns it.
-        if '2010-01-01' <= day < end and all(pd.notna(v) for v in values.values()):
+        closed=datetime.combine(date.fromisoformat(day),clocktime(17),ZoneInfo('America/New_York')).astimezone(timezone.utc)
+        if day>='2010-01-01' and closed<built_at and all(pd.notna(v) for v in values.values()):
             if not values['low'] <= min(values['open'],values['close']) <= max(values['open'],values['close']) <= values['high']:
                 raise ValueError('Invalid source OHLC')
             bars.append({'date':day, **values})

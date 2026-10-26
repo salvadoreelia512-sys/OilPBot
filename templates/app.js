@@ -1,6 +1,6 @@
 /* No external JavaScript dependencies; charts are rendered as accessible SVG. */
 const $ = id => document.getElementById(id);
-let direction = 'long', result = null, quote = null, busy = false, generation = 0, newsData = null, newsExpiresAt = Infinity;
+let direction = 'long', result = null, quote = null, busy = false, generation = 0, newsData = null, newsExpiresAt = Infinity, liveSignal = null;
 const fmt = value => Number(value).toFixed(2);
 const probabilityText = p => p>0 && p<.001 ? '<0.1%' : p<1 && p>.999 ? '>99.9%' : (p*100).toFixed(1)+'%';
 const labels = ['1 hour', '3 hours', '5 hours', '1 day', '1 week', '1 month'];
@@ -23,7 +23,7 @@ function clearResults() {
     $('projection-chart').innerHTML = '<p class="muted">Your projected range will appear here.</p>';
     $('summary').textContent = '';
     $('closed-note').hidden = true;
-    $('outlook').textContent='Calculate to see a directional setup.';$('setup-levels').hidden=true;$('setup-note').textContent='';$('evidence').textContent='';
+    $('evidence').textContent='';
 }
 function showQuote(value) {
     if (!Number.isFinite(value.price) || !Number.isFinite(Date.parse(value.timestamp_utc))) throw new Error('The source returned an invalid quote.');
@@ -88,18 +88,6 @@ function render(data) {
     $('summary').textContent = `Move to target: ${data.price_change_percent.toFixed(2)}% · Implied ${data.leverage}× return: +${data.leveraged_return_percent.toFixed(2)}% before costs`;
     $('model-note').textContent = `Forecast reference: $${fmt(data.quote.price)} at ${new Date(data.quote.timestamp_utc).toLocaleString()}. ` + data.model.basis + '. ' + (data.model.delay_notice || 'A model range is not the actual future path.');
     if(data.outlook){
-        const o=data.outlook;
-        const setup=o.setup;
-        if(setup){
-            $('outlook').textContent=setup.status;
-            $('setup-levels').hidden=false;
-            $('setup-direction').textContent=setup.direction.toUpperCase();
-            $('setup-entry').textContent=`${setup.entry_condition} $${fmt(setup.entry_price)}`;
-            $('setup-week').textContent='$'+fmt(setup.week_target);
-            $('setup-month').textContent='$'+fmt(setup.month_target);
-            $('setup-note').textContent=setup.basis+' '+setup.notice;
-        }
-
         const e=data.evidence;
         $('evidence').textContent=`${e.observations} live observations · ${e.news.coverage}/${e.news.sources.length} news feeds reachable · ${e.news.headlines.length} dated oil headlines. ${e.validation} ${e.unmodeled}`;
 
@@ -145,6 +133,7 @@ async function calculate(event) {
 }
 function applyQuote(data) {
     if(showQuote(data.quote)===false) return;
+    updateSignalQuote(data.quote);
     if(data.source_warning) setError('Source connection interrupted; showing the last verified quote.');
 }
 async function refreshQuote() {
@@ -173,7 +162,7 @@ $('chart-horizon').addEventListener('change',()=>{if(result)$('projection-chart'
 $('forecast-form').addEventListener('submit',calculate);
 setInterval(()=>{
     if(newsData && Date.now()>=newsExpiresAt) renderNews(newsData,true);
-    if(quote) showQuote(quote);
+    if(quote){showQuote(quote);updateSignalQuote(quote);}
     if(quote && quote.market_open && Date.now()-Date.parse(quote.timestamp_utc)>120000){$('status').textContent='Quote too old · waiting for an update';$('status').dataset.status='unavailable';}
 },1000);
 function renderNews(data, preserveStatus = false) {
@@ -197,11 +186,58 @@ function renderNews(data, preserveStatus = false) {
         p.append(a,meta);$('news').append(p);
     }
 }
+function renderSignal(data) {
+    liveSignal=data;
+    const angle=data.score*Math.PI/2, x=110+75*Math.sin(angle),y=110-75*Math.cos(angle);
+    $('signal-gauge').innerHTML=`<svg viewBox="0 0 220 150" role="img" aria-label="${escapeText(data.rating)} technical agreement"><path d="M20 110 A90 90 0 0 1 65 32" fill="none" stroke="#ef7781" stroke-width="12" stroke-linecap="round"/><path d="M65 32 A90 90 0 0 1 155 32" fill="none" stroke="#94a1b3" stroke-width="12"/><path d="M155 32 A90 90 0 0 1 200 110" fill="none" stroke="#6fe0bf" stroke-width="12" stroke-linecap="round"/><path d="M110 110 L${x} ${y}" stroke="#f0f4fa" stroke-width="6" stroke-linecap="round"/><text x="110" y="136" text-anchor="middle">${escapeText(data.rating)}</text></svg><p class="note">Sell ${data.counts.sell} · Neutral ${data.counts.neutral} · Buy ${data.counts.buy}. Votes are correlated indicators, not probabilities.</p>`;
+    const setup=data.setup;
+    $('setup-levels').hidden=!setup;
+    if(setup){
+        $('setup-direction').textContent=setup.direction.toUpperCase();
+        $('setup-entry').textContent=(setup.direction==='long'?'Break above $':'Break below $')+fmt(setup.entry);
+        $('setup-stop').textContent='$'+fmt(setup.invalidation);
+        $('setup-week').textContent='$'+fmt(setup.week_target);
+        $('setup-month').textContent='$'+fmt(setup.month_target);
+    }
+    $('setup-note').textContent=`Reference levels from daily session ${data.as_of_bar}, weekly session ${data.weekly_as_of}. Valid until ${new Date(data.valid_until).toLocaleString()}. ${data.notice} Week/month targets are alternative reference scenarios.`;
+    const report=data.historical_validation;
+    const negative=Object.values(report.horizons || {}).some(v=>(v.heldout.net_mean_by_roundtrip_bps?.['25'] ?? 0)<0);
+    $('signal-confidence').textContent=report.reliability_gate_passed?'Historical technical rule passed its stated gate under assumed costs. The combined live/news action remains unvalidated.':negative?'Historical simulation includes negative average net returns. Watch levels only; no proven best action.':'Historical advantage is not established: conditional watch levels, not a proven best action.';
+    $('signal-indicators').textContent=`Daily: ${data.daily.indicators.map(i=>i.name+': '+({1:'buy',0:'neutral','-1':'sell'}[i.vote])).join(' · ')}. Weekly: ${data.weekly.indicators.map(i=>i.name+': '+({1:'buy',0:'neutral','-1':'sell'}[i.vote])).join(' · ')}.`;
+    const lines=[];
+    for(const [h,v] of Object.entries(report.horizons || {})) {
+        const r=v.heldout;
+        lines.push(r.trades?`${h}: ${r.trades} held-out trades; mean net return after assumed 25 bps ${ (r.net_mean_by_roundtrip_bps['25']*100).toFixed(2)}%; block interval ${r.mean_net_return_95pct_block_interval_at_25bps.map(x=>(x*100).toFixed(2)+'%').join(' to ')}.`:`${h}: no triggered trades in the evaluated sample.`);
+    }
+    $('signal-validation').textContent=lines.join(' ')+' Fixed rule, daily OHLC stop-first assumptions, gaps and assumed costs. Actual broker fills/financing, news filter and live intraday timing are not validated. Report through '+(report.data_last_bar || 'unknown')+'.';
+    updateSignalQuote(quote || data.quote);
+}
+function updateSignalQuote(value) {
+    if(!liveSignal) return;
+    const data=liveSignal,setup=data.setup,blocked=[...data.blocked_reasons];
+    if(!data.historical_validation.reliability_gate_passed) blocked.push('No positive historical edge established; watch only');
+    if((!value.usable || value.market_open && Date.now()-Date.parse(value.timestamp_utc)>120000) && !blocked.includes('The live quote is stale'))blocked.push('The live quote is stale');
+    if(!value.market_open && !blocked.includes('Market closed'))blocked.push('Market closed');
+    if(Date.now()>=Date.parse(data.valid_until))blocked.push('Setup expired; waiting for a newer completed session');
+    $('signal-current').textContent=`Current $${fmt(value.price)} · quote ${new Date(value.timestamp_utc).toLocaleString()} · technical check ${new Date(data.generated_at_utc).toLocaleString()}`;
+    if(!setup){$('outlook').textContent='No clear daily/weekly agreement — no entry suggested.';return;}
+    const sign=setup.direction==='long'?1:-1,beyond=sign*(value.price-setup.entry);
+    $('signal-current').textContent+=beyond>=0?' · Reference trigger crossed':` · $${fmt(Math.abs(value.price-setup.entry))} to entry trigger`;
+    if(beyond>.25*data.atr_14){$('outlook').textContent='Entry reference has passed — do not chase; wait for a new setup.';return;}
+    if(blocked.length){$('outlook').textContent=`Watch only: ${setup.direction.toUpperCase()} reference ${sign>0?'above':'below'} $${fmt(setup.entry)} per barrel. Stand aside · `+[...new Set(blocked)].join(' · ');return;}
+    $('outlook').textContent=beyond>=0?`${setup.direction.toUpperCase()} reference trigger crossed. Check the live quote; no order has been placed.`:`Conditional: ${setup.direction.toUpperCase()} only if price ${sign>0?'breaks above':'breaks below'} $${fmt(setup.entry)} per barrel.`;
+}
+async function refreshSignal() {
+    try { renderSignal(await api('/api/signal')); }
+    catch(error){liveSignal=null;$('setup-levels').hidden=true;$('signal-gauge').innerHTML='<p class="muted">Signal unavailable</p>';$('signal-current').textContent='';$('setup-note').textContent='';$('outlook').textContent='Live setup unavailable · '+error.message;$('signal-confidence').textContent='No current action is suggested.';}
+    finally {setTimeout(refreshSignal,15000);}
+}
 async function refreshNews() {
     try { renderNews(await api('/api/news')); }
     catch(error) { $('news-status').textContent='News refresh failed · previous articles may be outdated. '+error.message; }
     finally { setTimeout(refreshNews,60000); }
 }
 refreshNews();
+refreshSignal();
 connectQuotes();
 refreshQuote();

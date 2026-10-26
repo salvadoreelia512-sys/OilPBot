@@ -228,6 +228,25 @@ async def live_market(socket: WebSocket):
         pass
 
 
+@router.get("/api/signal")
+def current_signal(response: Response):
+    from src.intelligence import news_context
+    from src.technical_signal import live_signal
+    response.headers["Cache-Control"] = "no-store"
+    snapshot=feed.get()
+    now=datetime.now(timezone.utc)
+    try:
+        result=live_signal(snapshot,quote_payload(snapshot,now),news_context(now),now)
+        if feed.last_error:
+            result['status']='stand_aside'
+            result['blocked_reasons'].append('Live price stream reconnecting; wait for a verified update')
+        from src.storage import save_signal
+        result['signal_id']=save_signal(result,now)
+        return result
+    except (ValueError,OSError):
+        raise HTTPException(status_code=503,detail="Live technical setup unavailable; waiting for sufficient current completed-bar history.") from None
+
+
 @router.get("/api/strategy")
 def strategy_report(response: Response):
     from src.strategic import context

@@ -1,0 +1,107 @@
+{
+  "rule_version": "technical-breakout-v1",
+  "data_last_bar": "2026-10-23",
+  "instrument": "TVC:USOIL",
+  "data_sha256": "08963e55b0be1449cdbc68ca982541ae81adc73f819cf572bb2c9010c613595d",
+  "development_end_exclusive": "2019-01-01",
+  "heldout_start": "2019-01-01",
+  "horizons": {
+    "1 week": {
+      "tested_origins": 392,
+      "directional_origins": 339,
+      "development": {
+        "trades": 67,
+        "mean_gross_return": 0.007272475483433433,
+        "net_mean_by_roundtrip_bps": {
+          "5": 0.006772475483433432,
+          "10": 0.006272475483433432,
+          "25": 0.004772475483433431
+        },
+        "net_positive_fraction_at_25bps": 0.5223880597014925,
+        "mean_net_return_95pct_block_interval_at_25bps": [
+          -0.0056737677298416694,
+          0.016410927236386135
+        ],
+        "conservative_ambiguous_trades": 2,
+        "directions": {
+          "long": 27,
+          "short": 40
+        },
+        "gate_passed": false
+      },
+      "heldout": {
+        "trades": 52,
+        "mean_gross_return": -0.0032960318657227006,
+        "net_mean_by_roundtrip_bps": {
+          "5": -0.0037960318657227024,
+          "10": -0.0042960318657227015,
+          "25": -0.0057960318657227046
+        },
+        "net_positive_fraction_at_25bps": 0.5,
+        "mean_net_return_95pct_block_interval_at_25bps": [
+          -0.01742825103754472,
+          0.0073248171016379844
+        ],
+        "conservative_ambiguous_trades": 3,
+        "directions": {
+          "long": 33,
+          "short": 19
+        },
+        "gate_passed": false
+      }
+    },
+    "1 month": {
+      "tested_origins": 93,
+      "directional_origins": 77,
+      "development": {
+        "trades": 16,
+        "mean_gross_return": 0.029514611936927556,
+        "net_mean_by_roundtrip_bps": {
+          "5": 0.029014611936927556,
+          "10": 0.028514611936927555,
+          "25": 0.027014611936927554
+        },
+        "net_positive_fraction_at_25bps": 0.625,
+        "mean_net_return_95pct_block_interval_at_25bps": [
+          0.00967653208162548,
+          0.045114578903282396
+        ],
+        "conservative_ambiguous_trades": 0,
+        "directions": {
+          "long": 7,
+          "short": 9
+        },
+        "gate_passed": false
+      },
+      "heldout": {
+        "trades": 22,
+        "mean_gross_return": -0.01830051280908921,
+        "net_mean_by_roundtrip_bps": {
+          "5": -0.01880051280908921,
+          "10": -0.01930051280908921,
+          "25": -0.020800512809089212
+        },
+        "net_positive_fraction_at_25bps": 0.2727272727272727,
+        "mean_net_return_95pct_block_interval_at_25bps": [
+          -0.04432997166394137,
+          0.006279462060845907
+        ],
+        "conservative_ambiguous_trades": 4,
+        "directions": {
+          "long": 12,
+          "short": 10
+        },
+        "gate_passed": false
+      }
+    }
+  },
+  "reliability_gate_passed": false,
+  "method": "Fixed daily/weekly indicator consensus; next-session 20-day breakout entry; 1.5 ATR stop, 2/3 ATR targets, 5/21-session exits. Non-overlapping windows, gaps at worse opening fills, ambiguous daily order resolved stop-first. Six-trade blocks; no rule tuning on held-out data.",
+  "limitations": [
+    "Historical daily OHLC cannot establish intrabar order; ambiguous entries/stops treated as losses.",
+    "Assumed 5/10/25 bps costs exclude actual broker spreads, financing and execution differences.",
+    "News filter and live intraday trigger timing are not included in this historical technical-rule test.",
+    "Positive historical performance does not prove the best action or future reliability.",
+    "Daily OHLC data can be revised; no point-in-time release vintage is available."
+  ]
+}

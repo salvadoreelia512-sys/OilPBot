@@ -19,10 +19,14 @@
 <button type="submit" id="submit">Calculate probability</button>
 <p class="note">Live quotes update separately; forecasts run only when you press Calculate probability. Leverage changes your implied return, not the chance of the price being reached.</p>
 </form>
-<section id="action-section" aria-label="Directional setup" style="margin-top:24px;border-top:1px solid var(--line);padding-top:20px">
-<h2>Recommended action / scenario</h2><p id="outlook" class="info">Calculate to see a directional setup.</p>
-<dl id="setup-levels" hidden><dt>Direction</dt><dd id="setup-direction"></dd><dt>Entry reference</dt><dd id="setup-entry"></dd><dt>1 week target</dt><dd id="setup-week"></dd><dt>1 month target</dt><dd id="setup-month"></dd></dl>
-<p id="setup-note" class="note"></p></section></aside>
+<section id="action-section" aria-label="Live technical setup" style="margin-top:24px;border-top:1px solid var(--line);padding-top:20px">
+<h2>Live technical setup</h2><p class="note">Independent of your target, direction and leverage. Daily/weekly indicators use completed bars; live price updates the entry state.</p>
+<div id="signal-gauge" aria-label="Technical agreement"><p class="muted">Loading technical readings…</p></div>
+<p id="outlook" class="info" role="status">Checking the live market…</p><p id="signal-current" class="note"></p>
+<dl id="setup-levels" hidden><dt>Direction</dt><dd id="setup-direction"></dd><dt>Breakout entry reference · USD/barrel</dt><dd id="setup-entry"></dd><dt>Invalidation reference</dt><dd id="setup-stop"></dd><dt>1 week reference target</dt><dd id="setup-week"></dd><dt>1 month reference target</dt><dd id="setup-month"></dd></dl>
+<p id="setup-note" class="note"></p><p id="signal-confidence" class="note"></p>
+<details class="note"><summary>Indicators &amp; historical checks</summary><p id="signal-indicators"></p><p id="signal-validation"></p><a href="/api/signal" target="_blank" rel="noopener">Live signal evidence ↗</a></details>
+</section></aside>
 <div class="stack"><section class="panel"><h2>Chance of touching your target</h2><p class="muted" style="font-size:13px">At least once within each period, measured from the calculation time.</p><p id="forecast-state" class="note" role="status">Calculated only when you press Calculate probability. Results stay fixed until you calculate again.</p>
 <div class="cards" id="cards"><div class="card"><span>1 hour</span><strong>—</strong></div><div class="card"><span>3 hours</span><strong>—</strong></div><div class="card"><span>5 hours</span><strong>—</strong></div><div class="card"><span>1 day</span><strong>—</strong></div><div class="card"><span>1 week</span><strong>—</strong></div><div class="card"><span>1 month</span><strong>—</strong></div></div>
 <div id="probability-chart" class="chart" aria-label="Touch probabilities"><p class="muted">Enter a target to see estimated probabilities.</p></div><div class="summary" id="summary"></div><details class="note"><summary>Forecast evidence</summary><p id="evidence"></p></details><p class="info" id="closed-note" hidden></p>

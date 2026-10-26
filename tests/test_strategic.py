@@ -1,7 +1,8 @@
 import copy
 import hashlib
 import json
-from datetime import datetime,timedelta,timezone
+from datetime import datetime,timedelta,timezone,time,date
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -23,7 +24,8 @@ def test_sources_and_validation_fingerprint_are_consistent():
     assert data['instrument']=='TVC:USOIL'
     assert data['session_identity']['pro_name']=='TVC:USOIL'
     assert data['session_identity']['session']=='1800-1700'
-    assert data['bars'][-1]['date']<data['built_at_utc'][:10]
+    closed=datetime.combine(date.fromisoformat(data['bars'][-1]['date']),time(17),ZoneInfo('America/New_York')).astimezone(timezone.utc)
+    assert closed<datetime.fromisoformat(data['built_at_utc'])
     assert report['daily_tvc_touch_evaluated'] is True
     assert all(data['bars'][i]['date']<data['bars'][i+1]['date'] for i in range(len(data['bars'])-1))
     assert report['data_sha256']==hashlib.sha256(strategic.DATA_PATH.read_bytes()).hexdigest()

@@ -6,13 +6,14 @@ import {handler} from '../netlify/functions/api.mjs';
 const script=readFileSync(new URL('../templates/app.js',import.meta.url),'utf8');
 const spot={price:75,symbol:'TVC:USOIL',timestamp_utc:new Date().toISOString(),status:'fresh',market_open:true,usable:true};
 const response=(status,body,type='application/json')=>new Response(typeof body==='string'?body:JSON.stringify(body),{status,headers:{'content-type':type}});
+const signalFixture=()=>({score:-.5,rating:'Sell',counts:{sell:6,neutral:2,buy:0},daily:{indicators:[]},weekly:{indicators:[]},as_of_bar:'2026-10-23',weekly_as_of:'2026-10-23',valid_until:new Date(Date.now()+86400000).toISOString(),generated_at_utc:new Date().toISOString(),quote:spot,atr_14:1,blocked_reasons:[],setup:{direction:'short',entry:74,invalidation:75.5,week_target:72,month_target:71},historical_validation:{reliability_gate_passed:false,horizons:{}},notice:'Conditional only'});
 function ui(fetchForecast){
  const timers=[], marketRequests=[], intervals=[];
  const elements={};
  const get=id=>elements[id]??=( {value:id==='leverage'?'5':id==='target'?'78':id==='chart-horizon'?'168':'',textContent:'',innerHTML:'',hidden:false,dataset:{},disabled:false,events:{},children:[],append(...nodes){this.children.push(...nodes)},replaceChildren(){this.innerHTML='';this.children=[]},addEventListener(type,fn){this.events[type]=fn},setAttribute(key,value){this[key]=value}} );
- const context=vm.createContext({document:{getElementById:get,createElement:()=>({textContent:'',children:[],append(...nodes){this.children.push(...nodes)}})},fetch:async(path,options)=>path==='/api/market'?(marketRequests.push(options),response(200,{quote:spot})):path==='/api/news'?response(200,{sources:[],headlines:[]}):fetchForecast(path,options),AbortSignal,Date,console,setTimeout:(fn,ms)=>{timers.push({fn,ms});return 0},setInterval:(fn,ms)=>{intervals.push({fn,ms});return 0}});
+ const context=vm.createContext({document:{getElementById:get,createElement:()=>({textContent:'',children:[],append(...nodes){this.children.push(...nodes)}})},fetch:async(path,options)=>path==='/api/market'?(marketRequests.push(options),response(200,{quote:spot})):path==='/api/news'?response(200,{sources:[],headlines:[]}):path==='/api/signal'?response(200,signalFixture()):fetchForecast(path,options),AbortSignal,Date,console,setTimeout:(fn,ms)=>{timers.push({fn,ms});return 0},setInterval:(fn,ms)=>{intervals.push({fn,ms});return 0}});
  vm.runInContext(script,context);
- const api=vm.runInContext('({calculate,render,clearResults,projectionChart,renderNews,refreshNews,applyQuote,connectQuotes})',context);
+ const api=vm.runInContext('({calculate,render,clearResults,projectionChart,renderNews,refreshNews,applyQuote,connectQuotes,renderSignal,refreshSignal})',context);
  return {get,api,context,timers,marketRequests,intervals};
 }
 const fixture=()=>({quote:spot,target_price:78,price_change_percent:4,leverage:5,leveraged_return_percent:20,horizons:[1,3,5,24,168].map((hours,i)=>({hours,label:['1 hour','3 hours','5 hours','1 day','1 week'][i],probability:.1*i})),projection:Array.from({length:169},(_,hours)=>({hours,median:75,low:74-hours/100,high:76+hours/100})),model:{basis:'Range model',as_of_utc:new Date().toISOString()}});
@@ -54,10 +55,11 @@ test('proxy supports the new market and forecast endpoints',async()=>{
  const saved=process.env.OILPBOT_API_URL,nativeFetch=globalThis.fetch;
  try{
   process.env.OILPBOT_API_URL='https://backend.example.com';
-  globalThis.fetch=async(url)=>{assert.match(url.pathname,/\/api\/(market|forecast|news|strategy)/);return response(200,{ok:true})};
+  globalThis.fetch=async(url)=>{assert.match(url.pathname,/\/api\/(market|forecast|news|strategy|signal)/);return response(200,{ok:true})};
   assert.equal((await handler({path:'/api/market',httpMethod:'GET'})).statusCode,200);
   assert.equal((await handler({path:'/api/news',httpMethod:'GET'})).statusCode,200);
   assert.equal((await handler({path:'/api/strategy',httpMethod:'GET'})).statusCode,200);
+  assert.equal((await handler({path:'/api/signal',httpMethod:'GET'})).statusCode,200);
   assert.equal((await handler({path:'/api/forecast',httpMethod:'POST',body:'{}'})).statusCode,200);
   assert.equal((await handler({path:'/api/unknown',httpMethod:'GET'})).statusCode,404);
   globalThis.fetch=async()=>response(200,'<!doctype html>','text/html');
@@ -170,16 +172,14 @@ test('news rejects expired, future and undated articles in the browser',async()=
 });
 
 
-test('directional setup sits below the form and shows explicit entry and targets',async()=>{
- const data=fixture();
- data.outlook={setup:{direction:'short',entry_price:74,entry_condition:'break below',week_target:72,month_target:70,status:'conditional scenario',basis:'No supported signal.',notice:'Reference levels only.'}};
- data.evidence={observations:1,news:{coverage:0,sources:[],headlines:[]},validation:'Uncalibrated',unmodeled:''};
- const {api,get}=ui(async()=>response(200,data));
- await flush();await api.calculate();
+test('live setup sits below the form and is independent of calculated inputs',async()=>{
+ const {api,get}=ui(async()=>response(200,fixture()));await flush();
  assert.equal(get('setup-direction').textContent,'SHORT');
- assert.equal(get('setup-entry').textContent,'break below $74.00');
+ assert.equal(get('setup-entry').textContent,'Break below $74.00');
+ get('target').value='97.5';get('long').events.click();await api.calculate();
+ assert.equal(get('setup-direction').textContent,'SHORT');
  assert.equal(get('setup-week').textContent,'$72.00');
- assert.equal(get('setup-month').textContent,'$70.00');
+ assert.equal(get('setup-month').textContent,'$71.00');
  assert.equal(get('setup-levels').hidden,false);
  const html=readFileSync(new URL('../templates/index.html',import.meta.url),'utf8');
  assert.ok(html.indexOf('id="action-section"')>html.indexOf('</form>'));
@@ -220,4 +220,17 @@ test('tiny and near-certain model estimates are not rounded into certainty',asyn
  const {api,get}=ui(async()=>response(200,data));await flush();await api.calculate();
  assert.match(get('cards').innerHTML,/&lt;0.1%/);
  assert.match(get('cards').innerHTML,/&gt;99.9%/);
+});
+
+
+test('signal refreshes and live entry transitions do not calculate probabilities',async()=>{
+ let posts=0;const {api,get,timers}=ui(async()=>{posts++;return response(200,fixture())});await flush();
+ assert.ok(timers.some(t=>t.ms===15000));
+ const data=signalFixture();data.setup={direction:'long',entry:76,invalidation:74,week_target:78,month_target:79};api.renderSignal(data);
+ api.applyQuote({quote:{...spot,price:76.1}});
+ assert.match(get('signal-current').textContent,/trigger crossed/);
+ assert.match(get('outlook').textContent,/Watch only/);
+ api.applyQuote({quote:{...spot,price:77}});
+ assert.match(get('outlook').textContent,/do not chase/);
+ assert.equal(posts,0);
 });

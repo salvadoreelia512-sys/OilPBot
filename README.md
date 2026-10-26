@@ -252,13 +252,9 @@ successful calculation. Monte Carlo margins describe sampling noise, not predict
 accuracy. The model already shares deterministic random streams for repeatable results
 with the same inputs and evidence; freezing the display does not establish calibration.
 
-The directional setup appears below the calculation form, showing LONG or SHORT,
-an entry reference and separate one-week/one-month volatility-based target levels.
-When history or momentum does not support a direction, it explicitly shows a conditional
-breakout scenario in the user's selected direction. It never turns missing evidence
-into a supposedly validated recommendation. Its targets are distinct from the target
-entered for touch-probability calculation. A supported experimental momentum signal can
-select its own direction; all reference levels belong to that same frozen calculation.
+The former calculation-linked setup is replaced by an independent live technical
+panel below the form. Probability calculations remain frozen and manual-only;
+the live panel never reads the target price, direction or leverage fields.
 
 
 ## Reproducible strategic validation
@@ -307,3 +303,47 @@ current but does not create a permanently guaranteed market data service.
 Forecast records use model version `strategic-tvc-v1`. Live observation-based Brier
 statistics are separated by version so earlier model results are not mixed into the
 new model. Sparse quote samples still do not establish continuous-touch accuracy.
+
+
+## Live technical agreement and watch levels
+
+`GET /api/signal` combines completed daily/weekly TVC bars, current source quote and
+last-24-hour headline risk without any probability-form inputs. The native gauge
+uses six SMA/EMA comparisons plus RSI and MACD per timeframe (16 correlated votes).
+Daily periods are 20/50/200; weekly 10/20/50; RSI is 14 and MACD 12/26/9. It is our
+explicit rule, not TradingView's proprietary rating or a winning probability.
+
+A net score of at least ±0.25 selects a technical direction; otherwise no entry is
+suggested. Reference entry is the completed 20-day high/low plus/minus 0.1 Wilder
+ATR(14). Invalidation is 1.5 ATR away; alternative week/month targets are 2/3 ATR.
+These levels do not follow the user's chosen target. Daily/weekly references update
+on completed sessions; live quote events update distance/crossing state immediately.
+The full rule/news check refreshes every 15 seconds. A setup expires at the next
+regular session close (New York 17:00). Holidays are not an authoritative calendar.
+Post-close data refresh can now include a fully completed current-date session.
+
+Closed markets, stale data/quotes, news outages, elevated headline risk, expired or
+passed entries and ambiguous entry/invalidation history cause a stand-aside state.
+The panel does not chase a price beyond 0.25 ATR past the trigger, assume an order was
+executed, or claim the best action. A failed historical gate forces watch-only status.
+Form calculations cannot overwrite the live panel, and live updates cannot recalculate
+probabilities. New completed bars and news can change the panel independently.
+
+Run `python scripts/evaluate_signal.py` to reproduce the fixed technical-rule report
+in `src/data/signal_validation.json`. Later evaluation uses non-overlapping 5/21-session
+windows from 2019, next-session entry, stop-first ambiguous daily ordering, worse
+opening gap fills, and 5/10/25 basis-point round-trip cost assumptions. Funding,
+real broker execution and the live news gate are not validated. Six-trade block
+resampling is not a guarantee of independence or future profit.
+
+The frozen rule FAILED its reliability gate: 52 weekly and 22 monthly triggered trades;
+mean returns after 25 bps were about -0.58% and -2.08%. It is not a profitable strategy
+claim. The site reports those results and keeps the levels watch-only. Changing a
+threshold after inspecting this sample is not fresh out-of-sample validation.
+
+The database records a deduplicated paper-signal ledger (`technical_signal_log`) of
+rule/data version, first observed quote, levels, risk state and headline set. It logs
+state/headline changes, not every price tick; it never places trades or fabricates
+performance. This supplies future audit evidence without flooding free storage.
+Runtime archive refreshes invalidate promotion against an unmatched frozen report;
+old report results retain their own data-end date. Monitor retained database storage.

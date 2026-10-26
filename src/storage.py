@@ -51,6 +51,7 @@ def connect():
 
 
 SCHEMA = [
+    'CREATE TABLE IF NOT EXISTS technical_signal_log (id TEXT PRIMARY KEY, rule_version TEXT NOT NULL, created DOUBLE PRECISION NOT NULL, quote_ts DOUBLE PRECISION NOT NULL, evidence TEXT NOT NULL)',
     'CREATE TABLE IF NOT EXISTS oil_historical (series TEXT NOT NULL, day TEXT NOT NULL, value DOUBLE PRECISION NOT NULL, source TEXT NOT NULL, PRIMARY KEY(series,day))',
     'CREATE TABLE IF NOT EXISTS oil_archives (id TEXT PRIMARY KEY, report TEXT NOT NULL)',
     'CREATE TABLE IF NOT EXISTS tvc_observations (ts DOUBLE PRECISION PRIMARY KEY, price DOUBLE PRECISION NOT NULL)',
@@ -137,3 +138,17 @@ def statistics(now=None):
             'observation_based_brier_by_horizon':[{'model_version':version,'hours':h,'count':len(v),'score':sum((p-y)**2 for p,y in v)/len(v)} for (version,h),v in sorted(groups.items())],
             'limitations':'Observation-based diagnostics, not validated continuous-touch accuracy. Brief touches may be missed, gaps are excluded, overlapping forecasts are correlated. No hit-rate claim before adequate independent out-of-sample data.',
             'collection':'Only while the service is active; Render free sleep interrupts collection.'}
+
+
+def save_signal(signal, now):
+    """Deduplicate state changes and headline sets; never log every live tick."""
+    headlines=signal['news'].get('headlines',[])
+    news_ids=[hashlib.sha256(json.dumps([h['title'],h['url'],h['published_utc']]).encode()).hexdigest() for h in headlines]
+    key=[signal['rule_version'],signal['data_sha256'],signal['as_of_bar'],signal['direction'],signal['state'],signal['status'],sorted(signal['blocked_reasons']),news_ids]
+    sid=hashlib.sha256(json.dumps(key).encode()).hexdigest()
+    compact={k:signal[k] for k in ('rule_version','data_sha256','as_of_bar','weekly_as_of','score','counts','setup','state','status','blocked_reasons','quote','news')}
+    compact['historical_reliability_gate_passed']=signal['historical_validation'].get('reliability_gate_passed',False)
+    with connect() as db:
+        db.execute('INSERT INTO technical_signal_log VALUES (?,?,?,?,?) ON CONFLICT(id) DO NOTHING',
+                   (sid,signal['rule_version'],now.timestamp(),datetime.fromisoformat(signal['quote']['timestamp_utc']).timestamp(),json.dumps(compact)))
+    return sid
