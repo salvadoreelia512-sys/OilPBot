@@ -11,13 +11,14 @@ from zoneinfo import ZoneInfo
 
 import httpx
 import numpy as np
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel, Field
 from scipy.special import ndtri
 
 from src.simulation import closed_form_barrier_touch_prob
 
 SOURCE_URL = "https://www.tradingview.com/symbols/TVC-USOIL/"
+QUOTE_REFRESH_SECONDS = 10
 NY = ZoneInfo("America/New_York")
 HORIZONS = [("1 hour", 1), ("3 hours", 3), ("5 hours", 5), ("1 day", 24), ("1 week", 168)]
 
@@ -116,7 +117,7 @@ class OilFeed:
         with self.lock:
             if time.monotonic() >= self.next_attempt:
                 try:
-                    response = httpx.get(SOURCE_URL, headers={"User-Agent": "OilPBot/0.7", "Accept": "application/json,text/html"}, timeout=8, follow_redirects=True)
+                    response = httpx.get(SOURCE_URL, headers={"User-Agent": "OilPBot/0.7", "Accept": "application/json,text/html", "Cache-Control": "no-cache"}, timeout=8, follow_redirects=True)
                     response.raise_for_status()
                     snapshot = parse_snapshot(response.text)
                     if (snapshot.timestamp - datetime.now(timezone.utc)).total_seconds() > 60:
@@ -124,7 +125,7 @@ class OilFeed:
                     self.snapshot = snapshot
                     self.failures = 0
                     self.last_error = None
-                    self.next_attempt = time.monotonic() + 60
+                    self.next_attempt = time.monotonic() + QUOTE_REFRESH_SECONDS
                 except Exception as exc:
                     self.failures += 1
                     self.next_attempt = time.monotonic() + min(300, 30 * 2 ** min(self.failures - 1, 4))
@@ -211,7 +212,8 @@ def estimate(snapshot, request, now):
 
 
 @router.get("/api/market")
-def market():
+def market(response: Response):
+    response.headers["Cache-Control"] = "no-store"
     return {"quote": quote_payload(feed.get(), datetime.now(timezone.utc)),
             "source_warning": feed.last_error}
 

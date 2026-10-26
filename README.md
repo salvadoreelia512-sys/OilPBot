@@ -17,8 +17,12 @@ There are no user inputs for OVX, required return, or data mode.
 - Price and timestamp are extracted together from the same daily bar in the page's
   structured data. This public-page format is not a guaranteed API; failures or
   changed formats cause an explicit unavailable state, not invented prices.
-- Quotes are refreshed at most once per minute per process; errors trigger exponential
-  backoff capped at five minutes. Concurrent requests share the cache.
+- The browser checks quotes every 10 seconds, bypassing browser caches. The server
+  fetches at most once every 10 seconds per process and shares requests across users; errors trigger exponential
+  backoff capped at five minutes. Concurrent requests share the cache. Unchanged quotes do not trigger another
+  expensive forecast calculation. This is free public-page polling, not a guaranteed
+  live tick feed: TradingView may return a cached or delayed snapshot. Faster polling
+  cannot remove upstream delays; the source timestamp and stale-data guards remain authoritative.
 - During scheduled trading, quotes older than 15 minutes are refused automatically.
   During closures, the latest close is accepted only if no more than 15 minutes of
   scheduled trading have elapsed since its timestamp (and it is under 96 hours old).

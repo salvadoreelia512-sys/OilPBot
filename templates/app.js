@@ -7,7 +7,7 @@ const escapeText = value => String(value).replace(/[&<>"']/g, c => ({'&':'&amp;'
 
 async function api(path, options = {}) {
     let response;
-    try { response = await fetch(path, {...options, signal: AbortSignal.timeout(70000)}); }
+    try { response = await fetch(path, {cache: 'no-store', ...options, signal: AbortSignal.timeout(70000)}); }
     catch { throw new Error('The oil service could not be reached. It may be waking up; retry shortly.'); }
     if (!(response.headers.get('content-type') || '').includes('application/json')) throw new Error('The host did not return an API response. Check the backend deployment.');
     const data = await response.json();
@@ -30,7 +30,7 @@ function showQuote(value) {
     quote = value;
     $('price').textContent = '$' + fmt(value.price);
     const age = Math.max(0, Math.round((Date.now() - Date.parse(value.timestamp_utc))/60000));
-    $('quote-time').textContent = 'Quote: ' + new Date(value.timestamp_utc).toLocaleString() + ` · ${age} min old`;
+    $('quote-time').textContent = 'Quote: ' + new Date(value.timestamp_utc).toLocaleString() + ` · ${age} min old · checking every 10 seconds`;
     const status = {fresh:'Recent quote', delayed:'Delayed quote · checked automatically', market_closed:'Market closed · last session quote', unavailable:'Quote too old · waiting for an update'};
     $('status').textContent = status[value.status] || 'Quote unavailable';
     $('status').dataset.status = value.status;
@@ -115,9 +115,17 @@ async function calculate(event) {
     finally {busy=false; $('submit').disabled=false; $('submit').textContent='Calculate probability';}
 }
 async function refreshQuote() {
-    try { const data=await api('/api/market'); showQuote(data.quote); if(result && !busy) calculate(); if(data.source_warning) setError('Source refresh failed; showing the last verified snapshot.'); }
+    try {
+        const data=await api('/api/market');
+        const previous = result?.quote || quote;
+        const changed = !previous || data.quote.price !== previous.price || data.quote.timestamp_utc !== previous.timestamp_utc;
+        showQuote(data.quote);
+        if(!data.quote.usable) clearResults();
+        else if(changed && result && !busy) calculate();
+        if(data.source_warning) setError('Source refresh failed; showing the last verified snapshot.');
+    }
     catch(error){ $('status').textContent='Source unavailable · retry shortly'; if(!quote) setError(error.message); }
-    finally {setTimeout(refreshQuote,60000);}
+    finally {setTimeout(refreshQuote,10000);}
 }
 for(const side of ['long','short']) $(''+side).addEventListener('click',()=>{direction=side;generation++;clearResults();$('long').setAttribute('aria-pressed',String(side==='long'));$('short').setAttribute('aria-pressed',String(side==='short'));});
 $('target').addEventListener('input',()=>{generation++;clearResults();});

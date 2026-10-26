@@ -4,15 +4,16 @@ import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
 import {handler} from '../netlify/functions/api.mjs';
 const script=readFileSync(new URL('../templates/app.js',import.meta.url),'utf8');
-const spot={price:75,symbol:'TVC:USOIL',timestamp_utc:new Date().toISOString(),status:'fresh',market_open:true};
+const spot={price:75,symbol:'TVC:USOIL',timestamp_utc:new Date().toISOString(),status:'fresh',market_open:true,usable:true};
 const response=(status,body,type='application/json')=>new Response(typeof body==='string'?body:JSON.stringify(body),{status,headers:{'content-type':type}});
 function ui(fetchForecast){
+ const timers=[], marketRequests=[];
  const elements={};
  const get=id=>elements[id]??=( {value:id==='leverage'?'5':id==='target'?'78':id==='chart-horizon'?'168':'',textContent:'',innerHTML:'',hidden:false,dataset:{},disabled:false,events:{},replaceChildren(){this.innerHTML=''},addEventListener(type,fn){this.events[type]=fn},setAttribute(key,value){this[key]=value}} );
- const context=vm.createContext({document:{getElementById:get},fetch:async(path,options)=>path==='/api/market'?response(200,{quote:spot}):fetchForecast(path,options),AbortSignal,Date,console,setTimeout:()=>0,setInterval:()=>0});
+ const context=vm.createContext({document:{getElementById:get},fetch:async(path,options)=>path==='/api/market'?(marketRequests.push(options),response(200,{quote:spot})):fetchForecast(path,options),AbortSignal,Date,console,setTimeout:(fn,ms)=>{timers.push({fn,ms});return 0},setInterval:()=>0});
  vm.runInContext(script,context);
  const api=vm.runInContext('({calculate,render,clearResults,projectionChart})',context);
- return {get,api,context};
+ return {get,api,context,timers,marketRequests};
 }
 const fixture=()=>({quote:spot,target_price:78,price_change_percent:4,leverage:5,leveraged_return_percent:20,horizons:[1,3,5,24,168].map((hours,i)=>({hours,label:['1 hour','3 hours','5 hours','1 day','1 week'][i],probability:.1*i})),projection:Array.from({length:169},(_,hours)=>({hours,median:75,low:74-hours/100,high:76+hours/100})),model:{basis:'Range model',as_of_utc:new Date().toISOString()}});
 const flush=()=>new Promise(resolve=>setImmediate(resolve));
@@ -71,4 +72,32 @@ test('projection uses local date/time ticks and interpolated crossing marker',()
  assert.doesNotMatch(markup,/\+1 hours/);
  data.target_price=100;
  assert.match(api.projectionChart(data,1),/No displayed scenario crosses/);
+});
+
+
+test('quotes poll every ten seconds without browser caching or redundant forecasts',async()=>{
+ let forecasts=0;
+ const {api,timers,marketRequests}=ui(async()=>{forecasts++;return response(200,fixture())});
+ await flush();
+ assert.equal(timers.at(-1).ms,10000);
+ assert.equal(marketRequests[0].cache,'no-store');
+ await api.calculate();
+ await timers.at(-1).fn();
+ assert.equal(forecasts,1);
+ assert.equal(timers.at(-1).ms,10000);
+});
+
+test('a changed quote recalculates the forecast and an unusable quote clears it',async()=>{
+ let forecasts=0;
+ const {api,get,timers}=ui(async()=>{forecasts++;return response(200,fixture())});
+ await flush();await api.calculate();
+ try {
+  spot.price=75.5;
+  await timers.at(-1).fn();await flush();
+  assert.equal(forecasts,2);
+  spot.usable=false;
+  await timers.at(-1).fn();
+  assert.doesNotMatch(get('cards').innerHTML,/40.0%/);
+  assert.equal(forecasts,2);
+ } finally {spot.price=75;spot.usable=true;}
 });

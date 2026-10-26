@@ -82,12 +82,16 @@ def test_feed_caching_backoff_and_recovery(monkeypatch):
     feed=forecast.OilFeed()
     assert feed.get()==SNAP
     assert feed.get()==SNAP and len(calls)==1
-    clock[0]+=61;fail[0]=True
+    clock[0]+=9
+    assert feed.get()==SNAP and len(calls)==1
+    clock[0]+=1
     assert feed.get()==SNAP and len(calls)==2
+    clock[0]+=10;fail[0]=True
+    assert feed.get()==SNAP and len(calls)==3
     assert feed.last_error=='Oil source unavailable or quote format changed'
-    feed.get();assert len(calls)==2
+    feed.get();assert len(calls)==3
     clock[0]+=31;fail[0]=False
-    assert feed.get()==SNAP and len(calls)==3 and feed.last_error is None
+    assert feed.get()==SNAP and len(calls)==4 and feed.last_error is None
 
 
 def test_no_feed_gives_explicit_503(monkeypatch):
@@ -105,7 +109,9 @@ def test_endpoints_and_minimal_inputs(monkeypatch):
     monkeypatch.setattr(forecast,'datetime',Clock)
     monkeypatch.setattr(forecast.feed,'get',lambda:SNAP)
     with TestClient(app) as client:
-        assert client.get('/api/market').json()['quote']['symbol']=='TVC:USOIL'
+        market=client.get('/api/market')
+        assert market.json()['quote']['symbol']=='TVC:USOIL'
+        assert market.headers['cache-control']=='no-store'
         r=client.post('/api/forecast',json={'target_price':78,'direction':'long','leverage':5})
         assert r.status_code==200,r.text
         assert len(r.json()['horizons'])==6
