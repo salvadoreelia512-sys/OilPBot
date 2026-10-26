@@ -76,16 +76,16 @@ test('projection uses local date/time ticks and interpolated crossing marker',()
 });
 
 
-test('quotes poll every two seconds without browser caching or redundant forecasts',async()=>{
+test('quotes poll every second without browser caching or redundant forecasts',async()=>{
  let forecasts=0;
  const {api,timers,marketRequests}=ui(async()=>{forecasts++;return response(200,fixture())});
  await flush();
- assert.equal(timers.findLast(t=>t.ms===2000).ms,2000);
+ assert.equal(timers.findLast(t=>t.ms===1000).ms,1000);
  assert.equal(marketRequests[0].cache,'no-store');
  await api.calculate();
- await timers.findLast(t=>t.ms===2000).fn();
+ await timers.findLast(t=>t.ms===1000).fn();
  assert.equal(forecasts,1);
- assert.equal(timers.findLast(t=>t.ms===2000).ms,2000);
+ assert.equal(timers.findLast(t=>t.ms===1000).ms,1000);
 });
 
 test('a changed quote recalculates the forecast and an unusable quote clears it',async()=>{
@@ -95,10 +95,10 @@ test('a changed quote recalculates the forecast and an unusable quote clears it'
  try {
   spot.price=75.5;
   vm.runInContext('lastForecastRefresh=0',context);
-  await timers.findLast(t=>t.ms===2000).fn();await flush();
+  await timers.findLast(t=>t.ms===1000).fn();await flush();
   assert.equal(forecasts,2);
   spot.usable=false;
-  await timers.findLast(t=>t.ms===2000).fn();
+  await timers.findLast(t=>t.ms===1000).fn();
   assert.doesNotMatch(get('cards').innerHTML,/40.0%/);
   assert.equal(forecasts,2);
  } finally {spot.price=75;spot.usable=true;}
@@ -108,10 +108,10 @@ test('a changed quote recalculates the forecast and an unusable quote clears it'
 test('independent news remains visible when forecasts are cleared',async()=>{
  const {get,api,timers}=ui(async()=>response(503,{detail:'Stale quote'}));
  await flush();
- api.renderNews({sources:[{name:'EIA',available:true}],checked_at_utc:new Date().toISOString(),headlines:[{title:'Crude oil inventories',url:'https://www.eia.gov/story',source:'EIA',published_utc:new Date().toISOString(),used_for_risk:false}]});
+ api.renderNews({sources:[{name:'EIA',available:true}],checked_at_utc:new Date().toISOString(),headlines:[{title:'Crude oil inventories',url:'https://www.eia.gov/story',source:'EIA',published_utc:new Date().toISOString(),used_for_risk:true,potential_relevance:'Potential supply disruption'}]});
  assert.match(get('news-status').textContent,/1\/1 feeds reachable/);
  assert.equal(get('news').children.length,1);
- assert.match(get('news').children[0].children[1].textContent,/Background context/);
+ assert.match(get('news').children[0].children[1].textContent,/Potential supply disruption/);
  await api.calculate();
  assert.equal(get('news').children.length,1);
  assert.ok(timers.some(t=>t.ms===60000));
@@ -143,4 +143,25 @@ test('out-of-order HTTP responses cannot overwrite newer streamed prices',async(
  api.applyQuote({quote:{...spot,price:76.25,timestamp_utc:latest,checked_at_utc:latest}});
  api.applyQuote({quote:{...spot,price:74.5,checked_at_utc:new Date().toISOString(),usable:false}});
  assert.equal(get('price').textContent,'$76.25');
+});
+
+
+test('news rejects expired, future and undated articles in the browser',async()=>{
+ const {api,get,context}=ui(async()=>response(200,fixture()));
+ await flush();
+ const now=Date.now();
+ const story={title:'Oil supply news',url:'https://example.com/news',source:'Reuters'};
+ const data={sources:[{available:true,name:'News'}],headlines:[
+  {...story,published_utc:new Date(now-60000).toISOString()},
+  {...story,published_utc:new Date(now-86400001).toISOString()},
+  {...story,published_utc:new Date(now+60000).toISOString()},
+  {...story,published_utc:'invalid'}
+ ]};
+ api.renderNews(data);
+ assert.equal(get('news').children.length,1);
+ assert.equal(get('news').children[0].children[0].textContent,'Oil supply news');
+ vm.runInContext('newsData.headlines[0].published_utc=new Date(Date.now()-86400001).toISOString()',context);
+ api.renderNews(data,true);
+ assert.equal(get('news').children.length,1);
+ assert.match(get('news').children[0].textContent,/No matching oil headlines.*last 24 hours/);
 });

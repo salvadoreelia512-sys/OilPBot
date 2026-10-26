@@ -1,6 +1,6 @@
 /* No external JavaScript dependencies; charts are rendered as accessible SVG. */
 const $ = id => document.getElementById(id);
-let direction = 'long', result = null, quote = null, busy = false, generation = 0, lastForecastRefresh = 0;
+let direction = 'long', result = null, quote = null, busy = false, generation = 0, lastForecastRefresh = 0, newsData = null, newsExpiresAt = Infinity;
 const fmt = value => Number(value).toFixed(2);
 const labels = ['1 hour', '3 hours', '5 hours', '1 day', '1 week', '1 month'];
 const escapeText = value => String(value).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -30,7 +30,7 @@ function showQuote(value) {
     quote = value;
     $('price').textContent = '$' + fmt(value.price);
     const age = Math.max(0, Math.round((Date.now() - Date.parse(value.timestamp_utc))/1000));
-    $('quote-time').textContent = 'Quote: ' + new Date(value.timestamp_utc).toLocaleString() + ` · ${age} sec old · streaming, with automatic reconnect`;
+    $('quote-time').textContent = 'Quote: ' + new Date(value.timestamp_utc).toLocaleString() + ` · ${age} sec old · live stream · checked every second`;
     const status = {fresh:'Recent quote', delayed:'Delayed quote · checked automatically', market_closed:'Market closed · last session quote', unavailable:'Quote too old · waiting for an update'};
     $('status').textContent = status[value.status] || 'Quote unavailable';
     $('status').dataset.status = value.status;
@@ -89,7 +89,7 @@ function render(data) {
         const o=data.outlook;
         $('outlook').textContent=`Recommended action: ${o.action.toUpperCase()}${o.target_price?' · '+o.horizon+' · target $'+fmt(o.target_price):''} · ${o.leverage}× reference. ${o.reason}${o.conditional_setups?' Watch only: '+o.conditional_setups.map(s=>s.direction.toUpperCase()+' trigger $'+fmt(s.trigger)+' → target $'+fmt(s.target)).join('; ')+'. '+o.setup_notice:''}`;
         const e=data.evidence;
-        $('evidence').textContent=`${e.observations} observed quotes · ${e.news.coverage}/2 news feeds available · ${e.news.headlines.length} dated oil headlines. ${e.news.sources.map(s=>s.name+': '+(s.available?'reachable':'unavailable')).join(' · ')}. ${e.validation} ${e.unmodeled}${data.historical_context?' Historical context: '+Object.entries(data.historical_context.series).map(([k,v])=>k+' '+v.count+' daily observations ('+v.first+' to '+v.last+')').join('; ')+'. Daily validation MSE '+data.historical_context.validation.model_mse.toFixed(6)+' versus baseline '+data.historical_context.validation.zero_drift_mse.toFixed(6)+'. Historical directional model NOT promoted.':''}`;
+        $('evidence').textContent=`${e.observations} observed quotes · ${e.news.coverage}/${e.news.sources.length} news feeds available · ${e.news.headlines.length} dated oil headlines. ${e.news.sources.map(s=>s.name+': '+(s.available?'reachable':'unavailable')).join(' · ')}. ${e.validation} ${e.unmodeled}${data.historical_context?' Historical context: '+Object.entries(data.historical_context.series).map(([k,v])=>k+' '+v.count+' daily observations ('+v.first+' to '+v.last+')').join('; ')+'. Daily validation MSE '+data.historical_context.validation.model_mse.toFixed(6)+' versus baseline '+data.historical_context.validation.zero_drift_mse.toFixed(6)+'. Historical directional model NOT promoted.':''}`;
 
     }
     $('closed-note').hidden = data.quote.market_open;
@@ -120,7 +120,7 @@ function applyQuote(data) {
 async function refreshQuote() {
     try { applyQuote(await api('/api/market')); }
     catch(error){ $('status').textContent='Source unavailable · retry shortly'; if(!quote) setError(error.message); }
-    finally {setTimeout(refreshQuote,2000);}
+    finally {setTimeout(refreshQuote,1000);}
 }
 function connectQuotes() {
     if(typeof WebSocket === 'undefined') return;
@@ -138,24 +138,29 @@ $('leverage').addEventListener('input',()=>{generation++;$('leverage-label').tex
 $('chart-horizon').addEventListener('change',()=>{if(result)$('projection-chart').innerHTML=projectionChart(result,Number($('chart-horizon').value));});
 $('forecast-form').addEventListener('submit',calculate);
 setInterval(()=>{
+    if(newsData && Date.now()>=newsExpiresAt) renderNews(newsData,true);
+    if(quote) showQuote(quote);
     if(result && Date.now()-Date.parse(result.model.as_of_utc)>180000) clearResults();
-    if(quote && quote.market_open && Date.now()-Date.parse(quote.timestamp_utc)>120000){$('status').textContent='Quote too old · waiting for an update';clearResults();}
+    if(quote && quote.market_open && Date.now()-Date.parse(quote.timestamp_utc)>120000){$('status').textContent='Quote too old · waiting for an update';$('status').dataset.status='unavailable';clearResults();}
 },1000);
-function renderNews(data) {
+function renderNews(data, preserveStatus = false) {
+    newsData = data;
+    const headlines = data.headlines.filter(h=>{const age=Date.now()-Date.parse(h.published_utc);return Number.isFinite(age) && age>=0 && age<=86400000;});
+    newsExpiresAt = headlines.length ? Math.min(...headlines.map(h=>Date.parse(h.published_utc)+86400001)) : Infinity;
     const available = data.sources.filter(s=>s.available).length;
     const checked = data.checked_at_utc ? new Date(data.checked_at_utc).toLocaleString() : 'unknown';
-    $('news-status').textContent = `${available}/${data.sources.length} feeds reachable · Checked ${checked}. ` + data.sources.map(s=>s.name+': '+(s.available?'reachable':'unavailable')).join(' · ');
+    if(!preserveStatus) $('news-status').textContent = `${available}/${data.sources.length} feeds reachable · Checked ${checked}. ` + data.sources.map(s=>s.name+': '+(s.available?'reachable':'unavailable')).join(' · ');
     $('news').replaceChildren();
-    if(!data.headlines.length) {
+    if(!headlines.length) {
         const p=document.createElement('p');
-        p.textContent=available ? 'No matching oil headlines published in the last seven days.' : 'News sources unavailable. Retrying automatically.';
+        p.textContent=available ? 'No matching oil headlines published in the last 24 hours.' : 'News sources unavailable. Retrying automatically.';
         $('news').append(p);
     }
-    for(const h of data.headlines) {
+    for(const h of headlines) {
         if(!/^https?:\/\//i.test(h.url)) continue;
         const p=document.createElement('p'), a=document.createElement('a'), meta=document.createElement('small');
         a.href=h.url;a.textContent=h.title;a.target='_blank';a.rel='noopener noreferrer';
-        meta.textContent=` · ${h.source} · ${new Date(h.published_utc).toLocaleString()}${h.used_for_risk?'':' · Background context'}`;
+        meta.textContent=` · ${h.source} · ${new Date(h.published_utc).toLocaleString()}${h.potential_relevance?' · '+h.potential_relevance:''}`;
         p.append(a,meta);$('news').append(p);
     }
 }

@@ -4,6 +4,8 @@ News changes uncertainty, not a fabricated bullish/bearish prediction.
 import xml.etree.ElementTree as ET
 from email.utils import parsedate_to_datetime
 import math
+import re
+from urllib.parse import urlencode, urlsplit
 import sqlite3
 import threading
 import time
@@ -17,13 +19,41 @@ from src.config import BotSettings
 from src.news import RawHeadline, NewsRiskAdjuster
 
 SOURCES = {'BBC World': 'https://feeds.bbci.co.uk/news/world/rss.xml',
-           'EIA energy': 'https://www.eia.gov/rss/todayinenergy.xml'}
+           'EIA energy': 'https://www.eia.gov/rss/todayinenergy.xml',
+           'Google News oil search': 'https://news.google.com/rss/search?' + urlencode({
+               'q':'(oil OR crude OR OPEC OR Hormuz OR \"energy supply\") when:1d',
+               'hl':'en-US','gl':'US','ceid':'US:en'})}
 _lock = threading.Lock()
 _cache = None
 _until = 0
 _checked_at = None
 NEWS_REFRESH_SECONDS = 60
-NEWS_MAX_AGE_SECONDS = 7 * 86400
+NEWS_MAX_AGE_SECONDS = 86400
+
+
+
+def headline_priority(headline, now):
+    """Potential oil relevance, not a measured price effect or direction forecast."""
+    text = (headline.title + ' ' + re.sub(r'<[^>]+>', ' ', headline.summary)).lower()
+    if not re.search(r'\b(oil|crude|brent|wti|opec|hormuz|petroleum|refiner\w*|tanker\w*|pipeline\w*|gasoline|diesel|energy|iran|saudi|russia)\b', text):
+        return 0, 'No direct oil relevance identified'
+    rules = [
+        (6, r'\b(hormuz|blockade|embargo|tanker|pipeline|refiner\w*|outage|attack|missile|sanction\w*)\b', 'Potential supply or shipping disruption'),
+        (5, r'\b(opec|production|output|supply|inventory|inventories|stockpiles)\b', 'Oil supply, production or inventories'),
+        (4, r'\b(demand|recession|interest rates|federal reserve|inflation|china)\b', 'Potential oil demand or macroeconomic effect'),
+        (2, r'\b(oil|crude|brent|wti|petroleum|gasoline|diesel|energy)\b', 'Oil and energy market developments'),
+    ]
+    matches = [(score, reason) for score, pattern, reason in rules if re.search(pattern, text)]
+    if not matches:
+        return 0, 'No direct oil relevance identified'
+    score, reason = max(matches)
+    age_hours = max(0, (now-headline.published_utc).total_seconds()/3600)
+    return score * math.exp(-age_hours/24), reason
+
+
+def headline_key(headline):
+    title = re.sub(r'\s+-\s+' + re.escape(headline.source) + r'$', '', headline.title, flags=re.I)
+    return ' '.join(re.findall(r'\w+', title.lower()))
 
 
 def news_context(now):
@@ -47,35 +77,46 @@ def news_context(now):
                             published = published.astimezone(timezone.utc)
                         except (ValueError, TypeError, AttributeError):
                             continue
-                        items.append(RawHeadline(title=node.findtext('title') or '', source=name, published_utc=published,
-                                                 url=node.findtext('link') or '', summary=node.findtext('description') or ''))
+                        title=(node.findtext('title') or '').strip()
+                        url=(node.findtext('link') or '').strip()
+                        parsed=urlsplit(url)
+                        if not title or parsed.scheme not in ('http','https') or not parsed.hostname:
+                            continue
+                        items.append(RawHeadline(title=title, source=(node.findtext('source') or name).strip(), published_utc=published,
+                                                 url=url, summary=node.findtext('description') or ''))
                     return name, [h for h in items if 0 <= (now-h.published_utc).total_seconds() <= NEWS_MAX_AGE_SECONDS
-                                  and any(k in (h.title+' '+h.summary).lower() for k in
-                                          ['oil','crude','opec','hormuz','iran','tanker','refiner','sanction','pipeline','petroleum'])], True
+                                  and headline_priority(h,now)[0] > 0], True
                 except Exception:
                     previous = next((items for source, items, _ in (_cache or []) if source == name), [])
                     return name, previous, False
-            with ThreadPoolExecutor(max_workers=2) as pool:
+            with ThreadPoolExecutor(max_workers=len(SOURCES)) as pool:
                 fetched = list(pool.map(fetch, SOURCES.items()))
             _cache = fetched
             _checked_at = datetime.now(timezone.utc)
             _until = time.monotonic() + (NEWS_REFRESH_SECONDS if all(ok for _, _, ok in fetched) else 15)
         adjuster = NewsRiskAdjuster()
-        headlines = sorted([h for _, items, _ in _cache for h in items
-                            if 0 <= (now-h.published_utc).total_seconds() <= NEWS_MAX_AGE_SECONDS],
-                           key=lambda h: h.published_utc, reverse=True)
-        adjuster.ingest_headlines([h for h in headlines if (now-h.published_utc).total_seconds() <= 86400])
+        candidates = sorted([h for _, items, _ in _cache for h in items
+                             if 0 <= (now-h.published_utc).total_seconds() <= NEWS_MAX_AGE_SECONDS],
+                            key=lambda h: (headline_priority(h,now)[0], h.published_utc), reverse=True)
+        seen = set()
+        headlines = []
+        for h in candidates:
+            key = headline_key(h)
+            if key not in seen:
+                seen.add(key)
+                headlines.append(h)
+        adjuster.ingest_headlines(headlines)
         adjustment = adjuster.compute_adjustment(now)
         return {'sources': [{'name':name,'url':SOURCES[name],'available':ok} for name,_,ok in _cache],
                 'coverage':sum(ok for _,_,ok in _cache),
                 'drivers':[{'title':d.title,'event_type':d.event_type,'impact':d.effective_impact} for d in adjustment.drivers[:5]],
                 'headlines':[{'title':h.title,'url':h.url,'source':h.source,
                               'published_utc':h.published_utc.isoformat(),
-                              'used_for_risk':(now-h.published_utc).total_seconds() <= 86400} for h in headlines[:8]],
+                              'used_for_risk':True, 'potential_relevance':headline_priority(h,now)[1]} for h in headlines[:8]],
                 'checked_at_utc':_checked_at.isoformat() if _checked_at else None,
                 'refresh_seconds':NEWS_REFRESH_SECONDS,
                 'vol_multiplier':adjustment.vol_multiplier, 'jump_intensity':adjustment.jump_intensity_annual,
-                'method':'Rule-based clustering, scoring and time decay; limited free-feed coverage, not global understanding or sentiment certainty.'}
+                'method':'Real publisher headlines from the last 24 hours, deduplicated and ranked by potential oil relevance and recency. Ranking is rule-based, not a measured price-impact prediction.'}
 
 
 def history(snapshot):

@@ -42,8 +42,8 @@ def test_news_feed_dates_coverage_and_dedup(monkeypatch):
     monkeypatch.setattr(module,'_cache',None)
     monkeypatch.setattr(module.httpx,'get',lambda url,**kwargs:httpx.Response(200,text=xml,request=httpx.Request('GET',url)))
     data=module.news_context(NOW)
-    assert data['coverage']==2
-    assert len(data['headlines'])==2
+    assert data['coverage']==len(module.SOURCES)
+    assert len(data['headlines'])==1
     assert all(h['title']==title for h in data['headlines'])
     assert len(data['drivers'])==1
     assert data['vol_multiplier']>1 or data['jump_intensity']>0
@@ -62,7 +62,7 @@ def test_volatility_has_no_warmup_threshold_jump():
     assert max(abs(a['probability']-b['probability']) for a,b in zip(before['horizons'],after['horizons']))<.02
 
 
-def test_news_shows_background_but_does_not_apply_old_risk(monkeypatch):
+def test_news_excludes_articles_older_than_24_hours(monkeypatch):
     import httpx
     import src.intelligence as module
     from email.utils import format_datetime
@@ -73,9 +73,8 @@ def test_news_shows_background_but_does_not_apply_old_risk(monkeypatch):
     monkeypatch.setattr(module,'_cache',None)
     monkeypatch.setattr(module.httpx,'get',lambda url,**kwargs:httpx.Response(200,text=xml,request=httpx.Request('GET',url)))
     data=module.news_context(NOW)
-    assert data['coverage']==2
-    assert len(data['headlines'])==2
-    assert all(not h['used_for_risk'] for h in data['headlines'])
+    assert data['coverage']==len(module.SOURCES)
+    assert data['headlines']==[]
     assert data['drivers']==[]
     assert data['vol_multiplier']==1
     assert data['checked_at_utc']
@@ -105,12 +104,12 @@ def test_failed_news_retries_quickly_and_recovers_independently_of_quotes(monkey
     broken[0]=False
     assert module.news_context(NOW)['coverage']==0
     clock[0]+=15
-    assert module.news_context(NOW)['coverage']==2
+    assert module.news_context(NOW)['coverage']==len(module.SOURCES)
     with TestClient(app) as client:
         response=client.get('/api/news')
         assert response.status_code==200
         assert response.headers['cache-control']=='no-store'
-        assert response.json()['coverage']==2
+        assert response.json()['coverage']==len(module.SOURCES)
 
 
 def test_neutral_monte_carlo_matches_exact_barrier_probabilities():
@@ -124,3 +123,27 @@ def test_neutral_monte_carlo_matches_exact_barrier_probabilities():
             expected=closed_form_barrier_touch_prob(S.price,forecast['target_price'],sigma,horizon['trading_hours']/(252*23))
             error=4*math.sqrt(expected*(1-expected)/12000)+.002
             assert abs(horizon['probability']-expected)<=error
+
+
+def test_news_ranks_real_headlines_and_strictly_enforces_date_window(monkeypatch):
+    import httpx
+    import src.intelligence as module
+    from email.utils import format_datetime
+    def article(title, age):
+        return f'<item><title>{title}</title><link>https://example.com/{age}</link><source>Reuters</source><pubDate>{format_datetime(NOW-timedelta(seconds=age))}</pubDate></item>'
+    xml='<rss><channel>'+''.join([
+        article('Oil tanker blockade threatens Hormuz supplies',3600),
+        article('Oil prices rise in quiet trading',60),
+        article('Oil old story',86401),article('Oil future story',-60),
+        '<item><title>Oil undated</title><link>https://example.com/undated</link></item>',
+    ])+'</channel></rss>'
+    monkeypatch.setattr(module,'_until',0)
+    monkeypatch.setattr(module,'_cache',None)
+    monkeypatch.setattr(module.httpx,'get',lambda url,**kw:httpx.Response(200,text=xml,request=httpx.Request('GET',url)))
+    data=module.news_context(NOW)
+    assert len(data['headlines'])==2  # Identical stories across feeds appear once.
+    assert 'blockade' in data['headlines'][0]['title']
+    assert all(h['source']=='Reuters' for h in data['headlines'])
+    assert all(h['used_for_risk'] for h in data['headlines'])
+    # Expire cached stories even before another successful feed fetch.
+    assert module.news_context(NOW+timedelta(hours=25))['headlines']==[]

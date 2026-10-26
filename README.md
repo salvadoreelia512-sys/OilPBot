@@ -21,7 +21,7 @@ There are no user inputs for OVX, required return, or data mode.
   it is not a supported backend data-service contract. The app never replaces it
   silently with another instrument or invents a current timestamp.
 - Both forecast calculations and `/api/market` use that shared stream. The browser
-  receives updates through `/api/live` WebSocket, with two-second HTTP polling as
+  receives updates through `/api/live` WebSocket, with one-second HTTP polling as
   fallback (including hosts that cannot proxy WebSockets). A separate TradingView website or widget connection can differ briefly due to
   transport latency. No zero-delay
   guarantee is possible. Active forecasts refresh at most once every 15 seconds
@@ -111,12 +111,15 @@ with common random numbers across requests, Brownian-bridge barrier corrections
 cumulative touch probabilities at longer horizons are expected, not instability.
 The reported sampling margin describes Monte Carlo noise, not forecast accuracy.
 
-BBC World and EIA Today in Energy RSS are fetched without keys, cached for one
+BBC World, EIA Today in Energy and Google News oil-search RSS are fetched without keys, cached for one
 minute, filtered for oil-relevant dated articles, clustered, scored and decayed.
 Failed feeds retry after 15 seconds on the next request. The browser requests news
-every minute, independently of forecasting. Articles up to seven days old are shown
-with publication times; only articles from the last 24 hours enter the risk adjustment.
-Older articles are explicitly labeled background context. No matching recent article
+every minute, independently of forecasting. Only articles published in the last 24 hours are returned or displayed. Old, future
+or undated articles are excluded, including cached articles after a failed refresh.
+The browser removes expired articles even between successful refreshes. Real publisher
+headlines are deduplicated and ranked by potential oil relevance plus recency; source,
+publication time and potential relevance are shown. Ranking is a transparent heuristic,
+not a measured price-impact forecast, and no fictional headlines are generated. No matching recent article
 is distinct from an unreachable feed.
 News raises volatility/jump uncertainty; headlines do not automatically imply a
 price direction. Feed availability and actual headlines are visible under Evidence.
@@ -219,7 +222,7 @@ coverage and rerun validation before publishing a changed archive.
 
 ## Network access for development and deployment
 
-Allow outbound HTTPS to `feeds.bbci.co.uk` and `www.eia.gov` for server-side RSS,
+Allow outbound HTTPS to `feeds.bbci.co.uk`, `www.eia.gov` and `news.google.com` for server-side RSS,
 and secure WebSockets to `widgetdata.tradingview.com` for backend quotes. Keep TLS
 verification enabled. A cloud environment's egress settings do not change Render or
 visitors' browser settings. Allow `oilpbot.onrender.com` in the cloud network policy
@@ -229,7 +232,10 @@ Check `/api/news` for reachable sources and dated articles, and `/api/market` fo
 reference timestamp and usability. A reachable feed may have no new oil articles;
 EIA does not publish continuously. Confirm `/api/live` sends advancing source quote
 timestamps and that both long/short forecasts return six horizons in a real browser.
-The backend directly subscribes to public widget quotes rather than reading an
+Price HTTP refresh and displayed source age update every second; new upstream quote
+events are pushed immediately when received. A repeated displayed price retains its
+real source timestamp. Polling every second cannot guarantee a new market tick or
+remove upstream latency. The backend directly subscribes to public widget quotes rather than reading an
 iframe. A stale reference still returns 503 for forecasts; no alternate instrument
 or invented timestamp is substituted. The app uses one upstream stream per process,
 not one per browser. Free Render instances still sleep when idle; stream collection
