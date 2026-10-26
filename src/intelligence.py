@@ -20,8 +20,7 @@ from src.news import RawHeadline, NewsRiskAdjuster
 
 SOURCES = {'BBC World': 'https://feeds.bbci.co.uk/news/world/rss.xml',
            'EIA energy': 'https://www.eia.gov/rss/todayinenergy.xml',
-           'OilPrice': 'https://oilprice.com/rss/main',
-
+           'OilPrice': 'https://oilprice.com/rss/main'}
 _lock = threading.Lock()
 _cache = None
 _until = 0
