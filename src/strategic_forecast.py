@@ -31,7 +31,8 @@ def calculate(snapshot, request, now, rows, strategy, news):
     n=6000;paths=np.full(n,math.log(snapshot.price));touched=np.zeros(n,dtype=bool)
     if delay:
         paths+=-.5*sigma*sigma*delay+sigma*math.sqrt(delay)*np.random.default_rng(20261026).standard_normal(n)
-    log_target=math.log(request.target_price)
+    log_target=math.log(request.target_price) if request is not None else None
+    samples=np.empty((721,n),dtype=np.float32)
     endpoints={r['hours'] for r in rows};active_hours=0.
     for hour in range(721):
         if hour:
@@ -39,7 +40,7 @@ def calculate(snapshot, request, now, rows, strategy, news):
             previous_years=active_hours/YEAR_HOURS;active_hours+=hours;years=active_hours/YEAR_HOURS
             step_variance=integrated_variance(strategy,years,model)-integrated_variance(strategy,previous_years,model)
             total_variance+=step_variance
-            if stressed and dt:
+            if dt:
                 # Temporary headline risk is not extrapolated unchanged for a month.
                 news_decay=2**(-(hour-.5)/6)
                 fundamental_decay=2**(-(active_hours/23)/5)
@@ -49,13 +50,16 @@ def calculate(snapshot, request, now, rows, strategy, news):
                 rng=np.random.default_rng(20261025+hour);jump_rng=np.random.default_rng(20271025+hour)
                 previous=paths.copy();counts=jump_rng.poisson(rate*dt,n)
                 paths+=-.5*variance-rate*(math.exp(.5*.025**2)-1)*dt+math.sqrt(variance)*rng.standard_normal(n)+np.sqrt(counts)*.025*jump_rng.standard_normal(n)
-                a=log_target-previous if request.direction=='long' else previous-log_target
-                b=log_target-paths if request.direction=='long' else paths-log_target
-                crossed=(a<=0)|(b<=0)
-                bridge=np.exp(np.minimum(0,-2*np.maximum(a,0)*np.maximum(b,0)/max(variance,1e-15)))
-                touched|=crossed|(rng.random(n)<bridge)
-        else:
+                if request is not None:
+                    a=log_target-previous if request.direction=='long' else previous-log_target
+                    b=log_target-paths if request.direction=='long' else paths-log_target
+                    crossed=(a<=0)|(b<=0)
+                    bridge=np.exp(np.minimum(0,-2*np.maximum(a,0)*np.maximum(b,0)/max(variance,1e-15)))
+                    touched|=crossed|(rng.random(n)<bridge)
+        elif request is not None:
             touched|=paths>=log_target if request.direction=='long' else paths<=log_target
+        samples[hour]=np.exp(paths)
+
         variance=total_variance+sigma*sigma*delay
         median=snapshot.price*math.exp(-.5*variance)
         projection.append({'hours':hour,'low':median*math.exp(float(ndtri(.1))*math.sqrt(variance)),
@@ -65,11 +69,13 @@ def calculate(snapshot, request, now, rows, strategy, news):
             risk_projection.append({'hours':hour,'low':float(low),'median':float(mid),'high':float(high)})
         if hour in endpoints:
             years=active_hours/YEAR_HOURS
-            probabilities[hour]=probability(total_variance,years)
-            stress_probabilities[hour]=float(np.mean(touched)) if stressed else probabilities[hour]
+            if request is not None:
+                probabilities[hour]=probability(total_variance,years)
+                stress_probabilities[hour]=float(np.mean(touched)) if stressed else probabilities[hour]
     for row in rows:
-        row['probability']=probabilities[row['hours']]
-        row['stress_probability']=stress_probabilities[row['hours']]
+        if request is not None:
+            row['probability']=probabilities[row['hours']]
+            row['stress_probability']=stress_probabilities[row['hours']]
         row['sampling_error_pp']=0.  # Central probability is analytical, not Monte Carlo.
         row['estimation_method']='analytical zero-drift daily-volatility baseline'
         row['integrated_variance']=integrated_variance(strategy,row['trading_hours']/YEAR_HOURS,model)
@@ -80,8 +86,10 @@ def calculate(snapshot, request, now, rows, strategy, news):
                           'central_range':point,'stress_range':risk,
                           'central_downside_percent':(point['low']/snapshot.price-1)*100,
                           'stress_downside_percent':(risk['low']/snapshot.price-1)*100})
-    return {'projection':projection,'long_term':long_term,'stress_active':stressed,'annual_volatility':sigma,
+    from src.price_outcomes import summarize
+    outcomes={str(h):summarize(samples,h,snapshot.price) for h in sorted(endpoints)}
+    return {'outcomes':outcomes,'projection':projection,'long_term':long_term,'stress_active':stressed,'annual_volatility':sigma,
             'risk_assumptions':{'headline_half_life_calendar_hours':6,'fundamental_half_life_trading_days':5,
                                 'news_volatility_scale':news_scale,'news_jump_intensity_annual':jumps,
                                 'fundamental_volatility_scale':fundamental_scale,
-                                'validated':False,'simulation_paths':n if stressed else 0}}
+                                'validated':False,'simulation_paths':n}}

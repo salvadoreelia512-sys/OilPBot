@@ -125,9 +125,10 @@ def integrated_variance(state, trading_years, model):
 
 
 def context(now):
-    data=load_data();report=load_validation()
+    # Hash the exact immutable bytes used for parameters, even during cache rollover.
+    raw=data_path().read_bytes();data=json.loads(raw);report=load_validation()
     state=parameters(data['bars'],data['weekly'],(now.date()-timedelta(days=1)).isoformat())
-    fingerprint=hashlib.sha256(data_path().read_bytes()).hexdigest()
+    fingerprint=hashlib.sha256(raw).hexdigest()
     matches=report.get('data_sha256')==fingerprint and report.get('version')==SPEC_VERSION
     # Never silently reuse a validation report after refreshing its input archive.
     promoted=bool(matches and report.get('promoted'))

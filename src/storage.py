@@ -51,6 +51,7 @@ def connect():
 
 
 SCHEMA = [
+    'CREATE TABLE IF NOT EXISTS price_outlook_log (id TEXT PRIMARY KEY, model_version TEXT NOT NULL, created DOUBLE PRECISION NOT NULL, quote_ts DOUBLE PRECISION NOT NULL, evidence TEXT NOT NULL)',
     'CREATE TABLE IF NOT EXISTS technical_signal_log (id TEXT PRIMARY KEY, rule_version TEXT NOT NULL, created DOUBLE PRECISION NOT NULL, quote_ts DOUBLE PRECISION NOT NULL, evidence TEXT NOT NULL)',
     'CREATE TABLE IF NOT EXISTS oil_historical (series TEXT NOT NULL, day TEXT NOT NULL, value DOUBLE PRECISION NOT NULL, source TEXT NOT NULL, PRIMARY KEY(series,day))',
     'CREATE TABLE IF NOT EXISTS oil_archives (id TEXT PRIMARY KEY, report TEXT NOT NULL)',
@@ -153,3 +154,16 @@ def save_signal(signal, now):
         db.execute('INSERT INTO technical_signal_log VALUES (?,?,?,?,?) ON CONFLICT(id) DO NOTHING',
                    (sid,signal['rule_version'],now.timestamp(),datetime.fromisoformat(signal['quote']['timestamp_utc']).timestamp(),json.dumps(compact)))
     return sid
+
+
+def save_price_outlook(result,now):
+    model=result['model']
+    outcomes={hours:{key:value for key,value in item.items() if key!='groups'} | {'groups':[{key:value for key,value in group.items() if key!='curve'} for group in item['groups']]} for hours,item in result['outcomes'].items()}
+    evidence={'model':model,'quote':result['quote'],'reference_price':result['reference_price'],'outcomes':outcomes,
+              'fundamentals':result['fundamentals'],'news':result['news']}
+    key=[model['version'],int(now.timestamp()//60),result['quote']['timestamp_utc'],result['reference_price'],model['data_sha256'],model['risk_assumptions']]
+    oid=hashlib.sha256(json.dumps(key).encode()).hexdigest()
+    with connect() as db:
+        db.execute('INSERT INTO price_outlook_log VALUES (?,?,?,?,?) ON CONFLICT(id) DO NOTHING',
+                   (oid,model['version'],now.timestamp(),datetime.fromisoformat(result['quote']['timestamp_utc']).timestamp(),json.dumps(evidence)))
+    return oid

@@ -1,0 +1,87 @@
+{
+  "version": "terminal-regimes-v1",
+  "data_sha256": "08963e55b0be1449cdbc68ca982541ae81adc73f819cf572bb2c9010c613595d",
+  "instrument": "TVC:USOIL",
+  "data_last_bar": "2026-10-23",
+  "band_percent": 0.25,
+  "horizons": {
+    "1 week": {
+      "origins": 392,
+      "multiclass_brier": 0.5349447336970957,
+      "frequency_benchmark_brier": 0.5277624414951931,
+      "largest_category_accuracy": 0.4387755102040816,
+      "largest_category_ece": 0.05419576399411694,
+      "categories": {
+        "down": {
+          "mean_predicted": 0.49297127419819853,
+          "observed_fraction": 0.4387755102040816
+        },
+        "middle": {
+          "mean_predicted": 0.04036474009738818,
+          "observed_fraction": 0.030612244897959183
+        },
+        "up": {
+          "mean_predicted": 0.46666398570441325,
+          "observed_fraction": 0.5306122448979592
+        }
+      },
+      "bins": [
+        {
+          "count": 326,
+          "mean_top_share": 0.4868962257728923,
+          "observed_top_category_fraction": 0.43558282208588955
+        },
+        {
+          "count": 66,
+          "mean_top_share": 0.5229783315716808,
+          "observed_top_category_fraction": 0.45454545454545453
+        }
+      ]
+    },
+    "1 month": {
+      "origins": 93,
+      "multiclass_brier": 0.5160710837566799,
+      "frequency_benchmark_brier": 0.5004612308542372,
+      "largest_category_accuracy": 0.4838709677419355,
+      "largest_category_ece": 0.1303627618529913,
+      "categories": {
+        "down": {
+          "mean_predicted": 0.5168718712305521,
+          "observed_fraction": 0.4838709677419355
+        },
+        "middle": {
+          "mean_predicted": 0.01966515050185644,
+          "observed_fraction": 0.0
+        },
+        "up": {
+          "mean_predicted": 0.46346297826759153,
+          "observed_fraction": 0.5161290322580645
+        }
+      },
+      "bins": [
+        {
+          "count": 13,
+          "mean_top_share": 0.49789796815819803,
+          "observed_top_category_fraction": 0.8461538461538461
+        },
+        {
+          "count": 77,
+          "mean_top_share": 0.5142476677635347,
+          "observed_top_category_fraction": 0.44155844155844154
+        },
+        {
+          "count": 3,
+          "mean_top_share": 0.6664466735308647,
+          "observed_top_category_fraction": 0.0
+        }
+      ]
+    }
+  },
+  "method": "Completed daily-origin terminal close returns in non-overlapping 5/21-session windows. Pre-2019 frequency benchmark; evaluation from 2019. Multiclass Brier is on a 0\u20132 scale, lower is better.",
+  "limitations": [
+    "This is not the earlier target-touch test or a technical trading-rule backtest.",
+    "Daily-origin baseline results do not validate the live news/supply stress overlay or hourly/intraday-origin categories.",
+    "5/21-session windows differ from exact live calendar horizons and exceptional holiday schedules.",
+    "Provider history can be revised; category ranks are not trade instructions or a guarantee of future accuracy."
+  ]
+}

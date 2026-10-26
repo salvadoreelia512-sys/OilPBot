@@ -4,247 +4,107 @@ import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
 import {handler} from '../netlify/functions/api.mjs';
 const script=readFileSync(new URL('../templates/app.js',import.meta.url),'utf8');
-const spot={price:75,symbol:'TVC:USOIL',timestamp_utc:new Date().toISOString(),status:'fresh',market_open:true,usable:true};
+const html=readFileSync(new URL('../templates/index.html',import.meta.url),'utf8');
+const spot={price:100,symbol:'TVC:USOIL',timestamp_utc:new Date().toISOString(),status:'fresh',market_open:true,usable:true};
 const response=(status,body,type='application/json')=>new Response(typeof body==='string'?body:JSON.stringify(body),{status,headers:{'content-type':type}});
-const signalFixture=()=>({score:-.5,rating:'Sell',counts:{sell:6,neutral:2,buy:0},daily:{indicators:[]},weekly:{indicators:[]},as_of_bar:'2026-10-23',weekly_as_of:'2026-10-23',valid_until:new Date(Date.now()+86400000).toISOString(),generated_at_utc:new Date().toISOString(),quote:spot,atr_14:1,blocked_reasons:[],setup:{direction:'short',entry:74,invalidation:75.5,week_target:72,month_target:71},historical_validation:{reliability_gate_passed:false,horizons:{}},notice:'Conditional only'});
-function ui(fetchForecast){
- const timers=[], marketRequests=[], intervals=[];
- const elements={};
- const get=id=>elements[id]??=( {value:id==='leverage'?'5':id==='target'?'78':id==='chart-horizon'?'168':'',textContent:'',innerHTML:'',hidden:false,dataset:{},disabled:false,events:{},children:[],append(...nodes){this.children.push(...nodes)},replaceChildren(){this.innerHTML='';this.children=[]},addEventListener(type,fn){this.events[type]=fn},setAttribute(key,value){this[key]=value}} );
- const context=vm.createContext({document:{getElementById:get,createElement:()=>({textContent:'',children:[],append(...nodes){this.children.push(...nodes)}})},fetch:async(path,options)=>path==='/api/market'?(marketRequests.push(options),response(200,{quote:spot})):path==='/api/news'?response(200,{sources:[],headlines:[]}):path==='/api/signal'?response(200,signalFixture()):fetchForecast(path,options),AbortSignal,Date,console,setTimeout:(fn,ms)=>{timers.push({fn,ms});return 0},setInterval:(fn,ms)=>{intervals.push({fn,ms});return 0}});
+const signalFixture=()=>({score:-.5,rating:'Sell',counts:{sell:6,neutral:2,buy:0},daily:{indicators:[]},weekly:{indicators:[]},as_of_bar:'2026-10-23',weekly_as_of:'2026-10-23',valid_until:new Date(Date.now()+86400000).toISOString(),generated_at_utc:new Date().toISOString(),quote:spot,atr_14:1,blocked_reasons:['No positive historical edge established; watch only'],setup:{direction:'short',entry:99,invalidation:100.5,week_target:97,month_target:96},historical_validation:{reliability_gate_passed:false,horizons:{}},notice:'Unvalidated scenario'});
+const fixture=(reference=null)=>({quote:spot,reference_price:reference,outcomes:Object.fromEntries([1,3,5,24,168,720].map(hours=>{
+ const units=hours===1?[340,430,230]:[500,30,470];
+ return [String(hours),{hours,label:hours+' hours',ends_at_utc:new Date(Date.now()+hours*3600000).toISOString(),trading_hours:hours,
+ reference_price:100,lower_boundary:99.75,upper_boundary:100.25,percentage_total:100,most_likely:[hours===1?'middle':'down'],near_tie:hours!==1,
+ groups:['down','middle','up'].map((key,i)=>({key,label:['Down','Sideways','Up'][i],probability:units[i]/1000,percentage_units:units[i],sample_count:units[i]*6,endpoint:99+i,curve:Array.from({length:hours+1},(_,h)=>100+(i-1)*h/hours)}))}];})),
+ model:{as_of_utc:new Date().toISOString(),last_daily_bar:'2026-10-23',simulation_paths:6000},validation:{current_archive_matches:true,horizons:{'1 week':{origins:392,multiclass_brier:.53,frequency_benchmark_brier:.52}}}});
+function ui(onOutlook=async(path,options)=>response(200,fixture(JSON.parse(options.body).reference_price))){
+ const elements={},timers=[],intervals=[],requests=[];
+ const get=id=>elements[id]??=({value:id==='target'?'':id==='chart-horizon'?'1':'',textContent:'',innerHTML:'',hidden:false,dataset:{},disabled:false,events:{},children:[],append(...nodes){this.children.push(...nodes)},replaceChildren(){this.children=[];this.innerHTML=''},addEventListener(type,fn){this.events[type]=fn},setAttribute(key,value){this[key]=value}});
+ const context=vm.createContext({document:{getElementById:get,createElement:()=>({textContent:'',children:[],append(...nodes){this.children.push(...nodes)}})},fetch:async(path,options)=>{
+  requests.push({path,options});
+  return path==='/api/market'?response(200,{quote:spot}):path==='/api/news'?response(200,{sources:[],headlines:[]}):path==='/api/signal'?response(200,signalFixture()):onOutlook(path,options);
+ },AbortSignal,Date,console,setTimeout:(fn,ms)=>{timers.push({fn,ms});return 0},setInterval:(fn,ms)=>{intervals.push({fn,ms});return 0}});
  vm.runInContext(script,context);
- const api=vm.runInContext('({calculate,render,clearResults,projectionChart,renderNews,refreshNews,applyQuote,connectQuotes,renderSignal,refreshSignal})',context);
- return {get,api,context,timers,marketRequests,intervals};
+ const api=vm.runInContext('({calculate,render,clearResults,projectionChart,renderSelectedOutcome,renderNews,refreshSignal,applyQuote,connectQuotes,renderSignal})',context);
+ return {get,api,context,timers,intervals,requests};
 }
-const fixture=()=>({quote:spot,target_price:78,price_change_percent:4,leverage:5,leveraged_return_percent:20,horizons:[1,3,5,24,168].map((hours,i)=>({hours,label:['1 hour','3 hours','5 hours','1 day','1 week'][i],probability:.1*i})),projection:Array.from({length:169},(_,hours)=>({hours,median:75,low:74-hours/100,high:76+hours/100})),model:{basis:'Range model',as_of_utc:new Date().toISOString()}});
 const flush=()=>new Promise(resolve=>setImmediate(resolve));
+const posts=ui=>ui.requests.filter(r=>r.path==='/api/outlook');
 
-test('only target, direction and leverage are sent; all charts render',async()=>{
- const {get,api}=ui(async(path,options)=>{assert.equal(path,'/api/forecast');assert.deepEqual(JSON.parse(options.body),{target_price:78,direction:'long',leverage:5});return response(200,fixture())});
- await api.calculate();
- assert.match(get('cards').innerHTML,/1 week/);
- assert.match(get('projection-chart').innerHTML,/<svg/);
- assert.match(get('probability-chart').innerHTML,/40.0%/);
- assert.match(get('summary').textContent,/20.00%/);
- assert.equal(get('submit').disabled,false);
-});
-test('failed requests show errors and retry recovers',async()=>{
- let n=0;const {get,api}=ui(async()=>++n===1?response(503,{detail:'Source unavailable'}):response(200,fixture()));
- await api.calculate();assert.equal(get('error').textContent,'Source unavailable');
- await api.calculate();assert.equal(get('error').hidden,true);assert.match(get('cards').innerHTML,/40.0%/);
-});
-test('HTML responses are handled without a JSON parsing crash',async()=>{
- const {get,api}=ui(async()=>response(200,'<!doctype html>','text/html'));
- await api.calculate();assert.match(get('error').textContent,/host did not return an API/);
-});
-test('changing direction keeps the snapshot and marks inputs changed',async()=>{
- const {get,api}=ui(async()=>response(200,fixture()));await api.calculate();
- get('short').events.click();assert.match(get('cards').innerHTML,/40.0%/);assert.match(get('forecast-state').textContent,/Inputs changed/);assert.equal(get('short')['aria-pressed'],'true');
-});
-test('market-closed quotes are labelled and not called live',async()=>{
- const data=fixture();data.quote={...spot,status:'market_closed',market_open:false};
- const {get,api}=ui(async()=>response(200,data));await flush();await api.calculate();
- assert.match(get('status').textContent,/Market closed/);assert.equal(get('closed-note').hidden,false);
-});
-test('input changes during a request discard its response',async()=>{
- let resolve;const {get,api}=ui(()=>new Promise(r=>resolve=r));
- const pending=api.calculate();get('target').events.input();resolve(response(200,fixture()));await pending;
- assert.doesNotMatch(get('cards').innerHTML,/40.0%/);
-});
-test('proxy supports the new market and forecast endpoints',async()=>{
- const saved=process.env.OILPBOT_API_URL,nativeFetch=globalThis.fetch;
- try{
-  process.env.OILPBOT_API_URL='https://backend.example.com';
-  globalThis.fetch=async(url)=>{assert.match(url.pathname,/\/api\/(market|forecast|news|strategy|signal)/);return response(200,{ok:true})};
-  assert.equal((await handler({path:'/api/market',httpMethod:'GET'})).statusCode,200);
-  assert.equal((await handler({path:'/api/news',httpMethod:'GET'})).statusCode,200);
-  assert.equal((await handler({path:'/api/strategy',httpMethod:'GET'})).statusCode,200);
-  assert.equal((await handler({path:'/api/signal',httpMethod:'GET'})).statusCode,200);
-  assert.equal((await handler({path:'/api/forecast',httpMethod:'POST',body:'{}'})).statusCode,200);
-  assert.equal((await handler({path:'/api/unknown',httpMethod:'GET'})).statusCode,404);
-  globalThis.fetch=async()=>response(200,'<!doctype html>','text/html');
-  assert.equal((await handler({path:'/api/market',httpMethod:'GET'})).statusCode,502);
- }finally{globalThis.fetch=nativeFetch;if(saved===undefined)delete process.env.OILPBOT_API_URL;else process.env.OILPBOT_API_URL=saved}
+test('removed panels and obsolete direction/leverage controls are absent',()=>{
+ for(const text of ['Chance of touching your target','Strategic evidence &amp; downside scenarios','id="cards"','id="probability-chart"','id="leverage"','id="long"','id="short"'])assert.ok(!html.includes(text),text);
+ assert.match(html,/id="outcome-likelihood"/);assert.match(html,/optional/);
+ const ids=new Set([...html.matchAll(/id="([^"]+)"/g)].map(m=>m[1]));
+ for(const match of script.matchAll(/\$\('([^']+)'\)/g))assert.ok(ids.has(match[1]),'Missing DOM node '+match[1]);
 });
 
-test('projection uses local date/time ticks and interpolated crossing marker',()=>{
- const {api}=ui(async()=>response(200,fixture()));const data=fixture();
- data.projection=[{hours:0,low:75,median:75,high:75},{hours:1,low:74,median:76,high:79}];
- const markup=api.projectionChart(data,1);
- assert.match(markup,/data-crossing="high"/);
- assert.match(markup,/Scenario crossing/);
- assert.doesNotMatch(markup,/\+1 hours/);
- data.target_price=100;
- assert.match(api.projectionChart(data,1),/No displayed scenario crosses/);
+test('optional reference sends only outlook data and all three end labels render',async()=>{
+ const u=ui();await flush();u.get('target').value='102';await u.api.calculate();
+ assert.deepEqual(JSON.parse(posts(u)[0].options.body),{reference_price:102});
+ assert.match(u.get('projection-chart').innerHTML,/Down 34.0%/);assert.match(u.get('projection-chart').innerHTML,/Sideways 43.0%/);assert.match(u.get('projection-chart').innerHTML,/Up 23.0%/);
+ assert.match(u.get('outcome-likelihood').textContent,/Sideways 43.0%/);assert.match(u.get('outcome-likelihood').textContent,/100.0%/);
+ assert.match(u.get('projection-chart').innerHTML,/Reference \$102.00/);assert.match(u.get('outcome-validation').textContent,/terminal-close tests/);
 });
 
-
-test('quotes poll every second without browser caching or redundant forecasts',async()=>{
- let forecasts=0;
- const {api,timers,marketRequests}=ui(async()=>{forecasts++;return response(200,fixture())});
- await flush();
- assert.equal(timers.findLast(t=>t.ms===1000).ms,1000);
- assert.equal(marketRequests[0].cache,'no-store');
- await api.calculate();
- await timers.findLast(t=>t.ms===1000).fn();
- assert.equal(forecasts,1);
- assert.equal(timers.findLast(t=>t.ms===1000).ms,1000);
+test('blank reference is allowed and chart-horizon changes use cached results',async()=>{
+ const u=ui();await flush();await u.api.calculate();assert.deepEqual(JSON.parse(posts(u)[0].options.body),{reference_price:null});
+ u.get('chart-horizon').value='168';u.get('chart-horizon').events.change();
+ assert.match(u.get('outcome-likelihood').textContent,/Down 50.0%/);assert.match(u.get('outcome-likelihood').textContent,/Near tie/);assert.equal(posts(u).length,1);
+ for(const hours of [1,3,5,24,168,720]){u.get('chart-horizon').value=String(hours);u.get('chart-horizon').events.change();assert.doesNotMatch(u.get('projection-chart').innerHTML,/NaN|undefined/);}
 });
 
-test('changed or stale quotes never recalculate or clear the snapshot',async()=>{
- let forecasts=0;
- const {api,get,timers,intervals}=ui(async()=>{forecasts++;return response(200,fixture())});
- await flush();await api.calculate();
- try {
-  spot.price=75.5;
-  await timers.findLast(t=>t.ms===1000).fn();await flush();
-  assert.equal(forecasts,1);
-  spot.usable=false;
-  await timers.findLast(t=>t.ms===1000).fn();
-  intervals[0].fn();
-  assert.match(get('cards').innerHTML,/40.0%/);
-  assert.equal(forecasts,1);
-  await api.calculate();
-  assert.equal(forecasts,2);
- } finally {spot.price=75;spot.usable=true;}
+test('live prices, signal refreshes, clock and reference edits do not recalculate or erase',async()=>{
+ const u=ui();await flush();await u.api.calculate();const before=u.get('projection-chart').innerHTML;
+ u.api.applyQuote({quote:{...spot,price:101,usable:false}});u.intervals[0].fn();await u.api.refreshSignal();
+ u.get('target').value='97.5';u.get('target').events.input();
+ assert.equal(posts(u).length,1);assert.equal(u.get('projection-chart').innerHTML,before);assert.match(u.get('forecast-state').textContent,/Reference changed/);
+ await u.api.calculate();assert.equal(posts(u).length,2);
 });
 
-
-test('independent news remains visible when forecasts are cleared',async()=>{
- const {get,api,timers}=ui(async()=>response(503,{detail:'Stale quote'}));
- await flush();
- api.renderNews({sources:[{name:'EIA',available:true}],checked_at_utc:new Date().toISOString(),headlines:[{title:'Crude oil inventories',url:'https://www.eia.gov/story',source:'EIA',published_utc:new Date().toISOString(),used_for_risk:true,potential_relevance:'Potential supply disruption'}]});
- assert.match(get('news-status').textContent,/1\/1 feeds reachable/);
- assert.equal(get('news').children.length,1);
- assert.match(get('news').children[0].children[1].textContent,/Potential supply disruption/);
- await api.calculate();
- assert.equal(get('news').children.length,1);
- assert.ok(timers.some(t=>t.ms===60000));
+test('failed replacement retains previous outlook; retry recovers',async()=>{
+ let count=0;const u=ui(async()=>++count===2?response(503,{detail:'Source unavailable'}):response(200,fixture()));await flush();
+ await u.api.calculate();const before=u.get('projection-chart').innerHTML;await u.api.calculate();
+ assert.equal(u.get('projection-chart').innerHTML,before);assert.equal(u.get('error').textContent,'Source unavailable');
+ await u.api.calculate();assert.equal(u.get('error').hidden,true);
 });
 
-test('native live price display avoids an unreadable external widget',()=>{
- const html=readFileSync(new URL('../templates/index.html',import.meta.url),'utf8');
- assert.match(html,/Live oil price and forecast reference/);
- assert.match(html,/TVC:USOIL · live oil price/);
- assert.doesNotMatch(html,/embed-widget-single-quote.js/);
+test('HTML responses and invalid references are reported without a crash',async()=>{
+ const u=ui(async()=>response(200,'<html>Unavailable</html>','text/html'));await flush();await u.api.calculate();assert.match(u.get('error').textContent,/host did not return an API/);
+ const count=posts(u).length;u.get('target').value='-1';await u.api.calculate();assert.equal(posts(u).length,count);assert.match(u.get('error').textContent,/positive optional/);
 });
 
-test('browser quote socket immediately applies a provider update',async()=>{
- const {context,get,api}=ui(async()=>response(200,fixture()));
- await flush();
- let socket;
- context.location={protocol:'https:',host:'oilpbot.onrender.com'};
- context.WebSocket=class { constructor(url){assert.equal(url,'wss://oilpbot.onrender.com/api/live');socket=this} };
- api.connectQuotes();
- socket.onmessage({data:JSON.stringify({quote:{...spot,price:76.25}})});
- assert.equal(get('price').textContent,'$76.25');
+test('input edits during a request discard the old response',async()=>{
+ let resolve;const u=ui(()=>new Promise(r=>resolve=r));await flush();const pending=u.api.calculate();u.get('target').events.input();resolve(response(200,fixture()));await pending;
+ assert.doesNotMatch(u.get('projection-chart').innerHTML,/<svg/);
 });
 
-
-test('out-of-order HTTP responses cannot overwrite newer streamed prices',async()=>{
- const {api,get}=ui(async()=>response(200,fixture()));
- await flush();
- const latest=new Date(Date.now()+1000).toISOString();
- api.applyQuote({quote:{...spot,price:76.25,timestamp_utc:latest,checked_at_utc:latest}});
- api.applyQuote({quote:{...spot,price:74.5,checked_at_utc:new Date().toISOString(),usable:false}});
- assert.equal(get('price').textContent,'$76.25');
+test('closed/empty categories keep valid label layout without inventing paths',()=>{
+ const u=ui(),data=fixture();const o=data.outcomes['1'];o.most_likely=['middle'];o.trading_hours=0;
+ for(const g of o.groups){g.percentage_units=g.key==='middle'?1000:0;g.curve=g.key==='middle'?[100,100]:[];g.endpoint=g.key==='middle'?100:null;}
+ u.api.render(data);assert.doesNotMatch(u.get('projection-chart').innerHTML,/NaN|undefined/);assert.match(u.get('projection-chart').innerHTML,/No sampled paths/);assert.match(u.get('outcome-likelihood').textContent,/Sideways 100.0%/);assert.match(u.get('outcome-ranges').textContent,/No scheduled trading/);
 });
 
-
-test('news rejects expired, future and undated articles in the browser',async()=>{
- const {api,get,context}=ui(async()=>response(200,fixture()));
- await flush();
- const now=Date.now();
- const story={title:'Oil supply news',url:'https://example.com/news',source:'Reuters'};
- const data={sources:[{available:true,name:'News'}],headlines:[
-  {...story,published_utc:new Date(now-60000).toISOString()},
-  {...story,published_utc:new Date(now-86400001).toISOString()},
-  {...story,published_utc:new Date(now+60000).toISOString()},
-  {...story,published_utc:'invalid'}
- ]};
- api.renderNews(data);
- assert.equal(get('news').children.length,1);
- assert.equal(get('news').children[0].children[0].textContent,'Oil supply news');
- vm.runInContext('newsData.headlines[0].published_utc=new Date(Date.now()-86400001).toISOString()',context);
- api.renderNews(data,true);
- assert.equal(get('news').children.length,1);
- assert.match(get('news').children[0].textContent,/No matching oil headlines.*last 24 hours/);
+test('independent scenario remains visible with failed historical gate and changing reference',async()=>{
+ const u=ui();await flush();assert.equal(u.get('outlook').textContent,'Model scenario: Short at $99.00/barrel');
+ u.get('target').value='105';await u.api.calculate();assert.equal(u.get('outlook').textContent,'Model scenario: Short at $99.00/barrel');
+ assert.match(u.get('signal-confidence').textContent,/not established/);
 });
 
-
-test('live setup sits below the form and is independent of calculated inputs',async()=>{
- const {api,get}=ui(async()=>response(200,fixture()));await flush();
- assert.equal(get('setup-direction').textContent,'SHORT');
- assert.equal(get('setup-entry').textContent,'Break below $74.00');
- get('target').value='97.5';get('long').events.click();await api.calculate();
- assert.equal(get('setup-direction').textContent,'SHORT');
- assert.equal(get('setup-week').textContent,'$72.00');
- assert.equal(get('setup-month').textContent,'$71.00');
- assert.equal(get('setup-levels').hidden,false);
- const html=readFileSync(new URL('../templates/index.html',import.meta.url),'utf8');
- assert.ok(html.indexOf('id="action-section"')>html.indexOf('</form>'));
- assert.ok(html.indexOf('id="action-section"')<html.indexOf('</aside>'));
+test('one-second market checks bypass caching; quote socket updates without an outlook post',async()=>{
+ const u=ui();await flush();assert.ok(u.timers.some(t=>t.ms===1000));assert.equal(u.requests.find(r=>r.path==='/api/market').options.cache,'no-store');
+ let socket;u.context.location={protocol:'https:',host:'oilpbot.onrender.com'};u.context.WebSocket=class{constructor(url){assert.equal(url,'wss://oilpbot.onrender.com/api/live');socket=this}};u.api.connectQuotes();socket.onmessage({data:JSON.stringify({quote:{...spot,price:101.25}})});
+ assert.equal(u.get('price').textContent,'$101.25');assert.equal(posts(u).length,0);
 });
 
-test('an old forecast stays visible while the clock and live feed advance',async()=>{
- let calls=0;const data=fixture();data.model.as_of_utc=new Date(Date.now()-86400000).toISOString();
- const {api,get,intervals}=ui(async()=>{calls++;return response(200,data)});
- await flush();await api.calculate();
- const before=get('cards').innerHTML;
- intervals[0].fn();
- api.applyQuote({quote:{...spot,price:77,usable:false}});
- assert.equal(get('cards').innerHTML,before);
- assert.equal(calls,1);
- assert.match(get('forecast-state').textContent,/Fixed snapshot/);
+test('news stays independent and excludes old/future/undated articles',async()=>{
+ const u=ui();await flush();const item={title:'Oil supply story',url:'https://example.com/story',source:'News'};u.api.renderNews({sources:[{name:'News',available:true}],headlines:[{...item,published_utc:new Date(Date.now()-60000).toISOString()},{...item,published_utc:new Date(Date.now()-86400001).toISOString()},{...item,published_utc:'invalid'},{...item,published_utc:new Date(Date.now()+60000).toISOString()}]});
+ assert.equal(u.get('news').children.length,1);await u.api.calculate();assert.equal(u.get('news').children.length,1);
 });
 
-test('strategic panel distinguishes daily-origin validation and unvalidated risk scenarios',async()=>{
- const data=fixture();
- data.horizons[0].stress_probability=.2;
- data.strategic={observations:4231,last_bar:'2026-10-23',data_status:'current daily proxy',annual_volatility_60d:.4,annual_volatility_252d:.3,momentum_20d_percent:2,model:'baseline',proxy_validation_promoted:false,
-  fundamentals:{inventories:{thousand_barrels:412517,weekly_change:-3060,year_on_year_percent:2,week_ending:'2026-10-16'}},
-  long_term:[{horizon:'1 week',central_range:{low:90,median:100,high:110},stress_range:{low:85,high:115},central_downside_percent:-10,stress_downside_percent:-15}],
-  validation:{horizons:{'1 week':{models:{baseline:{origins:392,cases:2352,brier:.187,ece:.025}}}}},coverage_gaps:['Exact TVC touch calibration unavailable']};
- const {api,get}=ui(async()=>response(200,data));await flush();await api.calculate();
- assert.match(get('cards').innerHTML,/Stress scenario 20.0%/);
- assert.match(get('strategic-summary').textContent,/4231 daily TVC/);
- assert.match(get('strategic-fundamentals').textContent,/EIA crude inventories/);
- assert.match(get('strategic-validation').textContent,/392 non-overlapping/);
- assert.match(get('strategic-validation').textContent,/not an error bound/);
- assert.match(get('strategic-ranges').children[0].textContent,/stress -15.0%/);
-});
-
-
-test('tiny and near-certain model estimates are not rounded into certainty',async()=>{
- const data=fixture();data.horizons[0].probability=.0001;data.horizons[1].probability=.9999;
- const {api,get}=ui(async()=>response(200,data));await flush();await api.calculate();
- assert.match(get('cards').innerHTML,/&lt;0.1%/);
- assert.match(get('cards').innerHTML,/&gt;99.9%/);
-});
-
-
-test('signal refreshes and live entry transitions do not calculate probabilities',async()=>{
- let posts=0;const {api,get,timers}=ui(async()=>{posts++;return response(200,fixture())});await flush();
- assert.ok(timers.some(t=>t.ms===15000));
- const data=signalFixture();data.setup={direction:'long',entry:76,invalidation:74,week_target:78,month_target:79};api.renderSignal(data);
- api.applyQuote({quote:{...spot,price:76.1}});
- assert.match(get('signal-current').textContent,/trigger crossed/);
- assert.equal(get('outlook').textContent,'Model scenario: Long at $76.00/barrel');
- api.applyQuote({quote:{...spot,price:77}});
- assert.match(get('signal-status').textContent,/do not chase/);
- assert.equal(posts,0);
-});
-
-
-test('failed validation does not hide a clearly labeled model scenario',async()=>{
- const {api,get}=ui(async()=>response(200,fixture()));await flush();
- const data=signalFixture();data.blocked_reasons=['No positive historical edge established; watch only'];
- data.historical_validation.reliability_gate_passed=false;
- api.renderSignal(data);
- assert.equal(get('outlook').textContent,'Model scenario: Short at $74.00/barrel');
- assert.match(get('signal-confidence').textContent,/not established/);
- assert.doesNotMatch(get('outlook').textContent,/Recommended/);
- api.applyQuote({quote:{...spot,usable:false}});
- assert.equal(get('outlook').textContent,'Model scenario: Short at $74.00/barrel');
- assert.match(get('signal-status').textContent,/stale/);
+test('proxy supports outlook and outcome validation with method and response guards',async()=>{
+ const saved=process.env.OILPBOT_API_URL,native=globalThis.fetch;
+ try{process.env.OILPBOT_API_URL='https://backend.example.com';globalThis.fetch=async()=>response(200,{ok:true});
+ assert.equal((await handler({path:'/api/outlook',httpMethod:'POST',body:'{}'})).statusCode,200);
+ assert.equal((await handler({path:'/api/outcome-validation',httpMethod:'GET'})).statusCode,200);
+ assert.equal((await handler({path:'/api/outlook',httpMethod:'GET'})).statusCode,405);
+ assert.equal((await handler({path:'/api/unknown',httpMethod:'GET'})).statusCode,404);
+ globalThis.fetch=async()=>response(200,'<html>wrong host</html>','text/html');assert.equal((await handler({path:'/api/outlook',httpMethod:'POST',body:'{}'})).statusCode,502);
+ }finally{globalThis.fetch=native;if(saved===undefined)delete process.env.OILPBOT_API_URL;else process.env.OILPBOT_API_URL=saved;}
 });

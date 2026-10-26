@@ -1,12 +1,31 @@
 # Oil, simplified
 
-A minimal WTI oil target-probability app. Enter a **target price**, choose **long or
-short**, and select **leverage**. The app returns the estimated probability of touching
-the target in **1 hour, 3 hours, 5 hours, 1 calendar day, 1 calendar week and 1 calendar month**, a
-probability chart, and a projected median / 10–90% price range.
+A WTI price dashboard with a live quote, dated energy headlines, an independent
+long/short model scenario, and a manually calculated price-outcome chart. Press
+**Calculate outlook**, then select **1 hour, 3 hours, 5 hours, 1 day, 1 week or 1 month**.
+An optional reference price draws an amber line; it does not change the estimates.
 
-Leverage affects the implied return at the target, not the market's touch probability.
-There are no user inputs for OVX, required return, or data mode.
+The former target-touch and strategic-downside panels have been removed. The chart
+now displays three disjoint ending-price categories relative to its calculation quote:
+**Down** below −0.25%, **Sideways** within ±0.25%, and **Up** above +0.25%.
+Percentages at the line ends total exactly **100.0%**, using largest-remainder rounding.
+The largest share is highlighted, with a near-tie notice when separation is weak.
+Dashed lines are conditional median guides for those categories, not predicted exact
+paths. Selecting a horizon uses the same frozen calculation; quotes and news remain live.
+
+The `terminal-regimes-v1` model uses 6,000 shared simulations, completed daily TVC
+volatility, the scheduled trading calendar, and temporary headline/supply risk assumptions.
+Headline weights and intraday forecasts are **unvalidated**. Separate terminal-close
+backtests (`scripts/evaluate_price_outcomes.py`, `/api/outcome-validation`) use 392 weekly
+and 93 monthly non-overlapping held-out origins. The baseline's multiclass Brier scores
+were **0.535 / 0.516**, versus **0.528 / 0.500** for the development-frequency benchmark
+(lower is better). It did not beat that benchmark. These tests do not establish calibrated
+live probabilities or profitable trades, and are separate from the legacy touch tests.
+
+`POST /api/outlook` accepts only an optional `reference_price`. Its audit records use
+`price_outlook_log`, separate from target-touch forecast outcomes. Legacy `/api/forecast`
+and its historical reports remain available for compatibility; older sections below describe
+that API and its earlier model development, rather than the current chart interface.
 
 ## Data and model
 
@@ -24,7 +43,7 @@ There are no user inputs for OVX, required return, or data mode.
   receives updates through `/api/live` WebSocket, with one-second HTTP polling as
   fallback (including hosts that cannot proxy WebSockets). A separate TradingView website or widget connection can differ briefly due to
   transport latency. No zero-delay
-  guarantee is possible. Forecasts run only when Calculate probability is pressed. Quotes, news, elapsed
+  guarantee is possible. Outlooks run only when Calculate outlook is pressed. Quotes, news, elapsed
   time and edited inputs do not recalculate or erase the last successful snapshot.
   Its original target, reference price, calculation time and horizon end dates remain
   visible. Input changes are marked until the user explicitly calculates again.

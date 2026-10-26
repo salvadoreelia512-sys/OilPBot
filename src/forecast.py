@@ -1,6 +1,7 @@
 """Exact TVC:USOIL snapshots and transparent multi-horizon GBM estimates."""
 import json
 import math
+import threading
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from html.parser import HTMLParser
@@ -16,6 +17,7 @@ from src.simulation import closed_form_barrier_touch_prob
 
 SOURCE_URL = "https://www.tradingview.com/symbols/TVC-USOIL/"
 MAX_QUOTE_AGE_SECONDS = 120
+_outlook_slot = threading.BoundedSemaphore(1)
 NY = ZoneInfo("America/New_York")
 HORIZONS = [("1 hour", 1), ("3 hours", 3), ("5 hours", 5), ("1 day", 24), ("1 week", 168)]
 
@@ -259,6 +261,34 @@ def news(response: Response):
     from src.intelligence import news_context
     response.headers["Cache-Control"] = "no-store"
     return news_context(datetime.now(timezone.utc))
+
+
+class OutlookRequest(BaseModel):
+    model_config = {"extra":"forbid","allow_inf_nan":False}
+    reference_price: float | None = Field(default=None,gt=0,le=1_000_000)
+
+
+@router.get("/api/outcome-validation")
+def outcome_validation():
+    from src.price_outcomes import validation
+    from src.strategic import context
+    return validation(context(datetime.now(timezone.utc))['data_sha256'])
+
+
+@router.post("/api/outlook")
+def price_outlook(request: OutlookRequest):
+    from src.price_outlook import build
+    from src.storage import save_price_outlook
+    if not _outlook_slot.acquire(timeout=15):
+        raise HTTPException(status_code=503,detail="Another outlook is being calculated; retry shortly.")
+    try:
+        snapshot=feed.get()
+        now=datetime.now(timezone.utc)
+        result=build(snapshot,request.reference_price,now)
+        result['outlook_id']=save_price_outlook(result,now)
+        return result
+    finally:
+        _outlook_slot.release()
 
 
 @router.post("/api/forecast")
