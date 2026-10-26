@@ -111,7 +111,7 @@ with common random numbers across requests, Brownian-bridge barrier corrections
 cumulative touch probabilities at longer horizons are expected, not instability.
 The reported sampling margin describes Monte Carlo noise, not forecast accuracy.
 
-BBC World, EIA Today in Energy, OilPrice and Google News oil-search RSS are fetched without keys, cached for one
+BBC World, EIA Today in Energy and OilPrice RSS are fetched without keys, cached for one
 minute, filtered for oil-relevant dated articles, clustered, scored and decayed.
 Failed feeds retry after 15 seconds on the next request. The browser requests news
 every minute, independently of forecasting. Only articles published in the last 24 hours are returned or displayed. Old, future
@@ -222,7 +222,7 @@ coverage and rerun validation before publishing a changed archive.
 
 ## Network access for development and deployment
 
-Allow outbound HTTPS to `feeds.bbci.co.uk`, `www.eia.gov`, `oilprice.com` and `news.google.com` for server-side RSS,
+Allow outbound HTTPS to `feeds.bbci.co.uk`, `www.eia.gov` and `oilprice.com` for server-side RSS,
 and secure WebSockets to `widgetdata.tradingview.com` for backend quotes. Keep TLS
 verification enabled. A cloud environment's egress settings do not change Render or
 visitors' browser settings. Allow `oilpbot.onrender.com` in the cloud network policy

@@ -5,7 +5,7 @@ import xml.etree.ElementTree as ET
 from email.utils import parsedate_to_datetime
 import math
 import re
-from urllib.parse import urlencode, urlsplit
+from urllib.parse import urlsplit
 import sqlite3
 import threading
 import time
@@ -21,9 +21,7 @@ from src.news import RawHeadline, NewsRiskAdjuster
 SOURCES = {'BBC World': 'https://feeds.bbci.co.uk/news/world/rss.xml',
            'EIA energy': 'https://www.eia.gov/rss/todayinenergy.xml',
            'OilPrice': 'https://oilprice.com/rss/main',
-           'Google News oil search': 'https://news.google.com/rss/search?' + urlencode({
-               'q':'(oil OR crude OR OPEC OR Hormuz OR \"energy supply\") when:1d',
-               'hl':'en-US','gl':'US','ceid':'US:en'})}
+
 _lock = threading.Lock()
 _cache = None
 _until = 0
