@@ -147,3 +147,17 @@ def test_news_ranks_real_headlines_and_strictly_enforces_date_window(monkeypatch
     assert all(h['used_for_risk'] for h in data['headlines'])
     # Expire cached stories even before another successful feed fetch.
     assert module.news_context(NOW+timedelta(hours=25))['headlines']==[]
+
+
+def test_conditional_setup_has_a_direction_entry_and_long_term_targets():
+    for direction in ['long','short']:
+        result=run(direction)
+        setup=result['outlook']['setup']
+        assert setup['direction']==direction
+        assert setup['status']=='conditional scenario'
+        assert result['outlook']['action']=='wait'  # No forced directional evidence.
+        if direction=='long':
+            assert S.price<setup['entry_price']<setup['week_target']<setup['month_target']
+        else:
+            assert S.price>setup['entry_price']>setup['week_target']>setup['month_target']>0
+        assert 'selected direction' in setup['basis']

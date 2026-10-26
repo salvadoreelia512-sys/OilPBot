@@ -206,6 +206,19 @@ def enhance(result, snapshot, request, now, context=None, observations=None):
     result['historical_context']=summary(archive)
     result['outlook']['conditional_setups']=[{'direction':'long','trigger':snapshot.high*1.001,'target':snapshot.high*1.001*math.exp(sigma*math.sqrt(115/(252*23))*.5)}, {'direction':'short','trigger':snapshot.low*.999,'target':snapshot.low*.999*math.exp(-sigma*math.sqrt(115/(252*23))*.5)}]
     result['outlook']['setup_notice']='Watch-only breakout scenarios, not active entries. Targets are volatility-based, not validated recommendations.'
+    setup_direction = direction if can_suggest else request.direction
+    sign = 1 if setup_direction == 'long' else -1
+    entry = snapshot.price if can_suggest else next(s['trigger'] for s in result['outlook']['conditional_setups'] if s['direction'] == setup_direction)
+    result['outlook']['setup'] = {
+        'direction': setup_direction,
+        'entry_price': entry,
+        'entry_condition': 'reference quote' if can_suggest else 'break above' if sign == 1 else 'break below',
+        'week_target': entry * math.exp(sign * sigma * math.sqrt(trading_hours(now,now+timedelta(days=7))/(252*23)) * .5),
+        'month_target': entry * math.exp(sign * sigma * math.sqrt(trading_hours(now,month_end)/(252*23)) * .5),
+        'status': 'experimental signal' if can_suggest else 'conditional scenario',
+        'basis': result['outlook']['reason'] if can_suggest else 'Uses your selected direction because the model has no supported directional signal. ' + result['outlook']['reason'],
+        'notice': 'Entry and targets are volatility-based reference levels, not a calibrated trading recommendation. Scenario targets differ from your probability target.',
+    }
     result['evidence']={'observations':len(observations),'history_ready':mature,'news':context,
                        'validation':'Uncalibrated: no measured out-of-sample accuracy is claimed. News affects volatility and jump risk, not price direction.',
                        'unmodeled':'Live inventories, USD/rates, futures curve, positioning, AIS, holidays and execution costs are not integrated.'}

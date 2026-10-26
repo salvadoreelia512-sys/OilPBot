@@ -1,6 +1,6 @@
 /* No external JavaScript dependencies; charts are rendered as accessible SVG. */
 const $ = id => document.getElementById(id);
-let direction = 'long', result = null, quote = null, busy = false, generation = 0, lastForecastRefresh = 0, newsData = null, newsExpiresAt = Infinity;
+let direction = 'long', result = null, quote = null, busy = false, generation = 0, newsData = null, newsExpiresAt = Infinity;
 const fmt = value => Number(value).toFixed(2);
 const labels = ['1 hour', '3 hours', '5 hours', '1 day', '1 week', '1 month'];
 const escapeText = value => String(value).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -22,7 +22,7 @@ function clearResults() {
     $('projection-chart').innerHTML = '<p class="muted">Your projected range will appear here.</p>';
     $('summary').textContent = '';
     $('closed-note').hidden = true;
-    $('outlook').textContent='';$('evidence').textContent='';
+    $('outlook').textContent='Calculate to see a directional setup.';$('setup-levels').hidden=true;$('setup-note').textContent='';$('evidence').textContent='';
 }
 function showQuote(value) {
     if (!Number.isFinite(value.price) || !Number.isFinite(Date.parse(value.timestamp_utc))) throw new Error('The source returned an invalid quote.');
@@ -80,14 +80,25 @@ function projectionChart(data, hours) {
 }
 function render(data) {
     result = data; showQuote(data.quote);
-    $('cards').innerHTML = data.horizons.map(row=>`<div class="card"><span>${escapeText(row.label)}</span><strong>${(row.probability*100).toFixed(1)}%</strong></div>`).join('');
+    $('forecast-state').textContent=`Fixed snapshot calculated ${new Date(data.model.as_of_utc).toLocaleString()} · ${data.direction?.toUpperCase() || direction.toUpperCase()} target $${fmt(data.target_price)}. Live prices and news do not change these results. Press Calculate probability for a new snapshot. MC margins describe simulation noise, not forecast accuracy.`;
+    $('cards').innerHTML = data.horizons.map(row=>`<div class="card"><span>${escapeText(row.label)}</span><strong>${(row.probability*100).toFixed(1)}%</strong>${Number.isFinite(row.sampling_error_pp)?`<small>MC ±${row.sampling_error_pp.toFixed(1)} pp</small>`:''}${row.ends_at_utc?`<small>Ends ${escapeText(new Date(row.ends_at_utc).toLocaleString())}</small>`:''}</div>`).join('');
     $('probability-chart').innerHTML = probabilityChart(data.horizons);
     $('projection-chart').innerHTML = projectionChart(data,Number($('chart-horizon').value));
     $('summary').textContent = `Move to target: ${data.price_change_percent.toFixed(2)}% · Implied ${data.leverage}× return: +${data.leveraged_return_percent.toFixed(2)}% before costs`;
     $('model-note').textContent = `Forecast reference: $${fmt(data.quote.price)} at ${new Date(data.quote.timestamp_utc).toLocaleString()}. ` + data.model.basis + '. ' + (data.model.delay_notice || 'A model range is not the actual future path.');
     if(data.outlook){
         const o=data.outlook;
-        $('outlook').textContent=`Recommended action: ${o.action.toUpperCase()}${o.target_price?' · '+o.horizon+' · target $'+fmt(o.target_price):''} · ${o.leverage}× reference. ${o.reason}${o.conditional_setups?' Watch only: '+o.conditional_setups.map(s=>s.direction.toUpperCase()+' trigger $'+fmt(s.trigger)+' → target $'+fmt(s.target)).join('; ')+'. '+o.setup_notice:''}`;
+        const setup=o.setup;
+        if(setup){
+            $('outlook').textContent=setup.status;
+            $('setup-levels').hidden=false;
+            $('setup-direction').textContent=setup.direction.toUpperCase();
+            $('setup-entry').textContent=`${setup.entry_condition} $${fmt(setup.entry_price)}`;
+            $('setup-week').textContent='$'+fmt(setup.week_target);
+            $('setup-month').textContent='$'+fmt(setup.month_target);
+            $('setup-note').textContent=setup.basis+' '+setup.notice;
+        }
+
         const e=data.evidence;
         $('evidence').textContent=`${e.observations} observed quotes · ${e.news.coverage}/${e.news.sources.length} news feeds available · ${e.news.headlines.length} dated oil headlines. ${e.news.sources.map(s=>s.name+': '+(s.available?'reachable':'unavailable')).join(' · ')}. ${e.validation} ${e.unmodeled}${data.historical_context?' Historical context: '+Object.entries(data.historical_context.series).map(([k,v])=>k+' '+v.count+' daily observations ('+v.first+' to '+v.last+')').join('; ')+'. Daily validation MSE '+data.historical_context.validation.model_mse.toFixed(6)+' versus baseline '+data.historical_context.validation.zero_drift_mse.toFixed(6)+'. Historical directional model NOT promoted.':''}`;
 
@@ -95,26 +106,21 @@ function render(data) {
     $('closed-note').hidden = data.quote.market_open;
     $('closed-note').textContent = 'The market is closed. Horizons with no scheduled trading have no modeled movement. The quote above is the last session price.';
 }
-async function calculate(event, background = false) {
+async function calculate(event) {
     event?.preventDefault(); if(busy) return;
     const id = ++generation;
     const target = Number($('target').value), leverage = Number($('leverage').value);
-    if(!background) clearResults();
     setError('');
     if(!Number.isFinite(target) || target<=0 || target>1000000 || leverage<1 || leverage>100){setError('Enter a valid positive target and leverage from 1× to 100×.');return;}
     busy=true; $('submit').disabled=true; $('submit').textContent='Calculating…';
     try {
         const data=await api('/api/forecast',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({target_price:target,direction,leverage})});
-        if(id===generation) {render(data);lastForecastRefresh=Date.now();}
+        if(id===generation) render(data);
     } catch(error){ if(id===generation) setError(error.message); }
     finally {busy=false; $('submit').disabled=false; $('submit').textContent='Calculate probability';}
 }
 function applyQuote(data) {
-    const previous = result?.quote || quote;
-    const changed = !previous || data.quote.price !== previous.price || data.quote.timestamp_utc !== previous.timestamp_utc;
     if(showQuote(data.quote)===false) return;
-    if(!data.quote.usable) clearResults();
-    else if(changed && result && !busy && Date.now()-lastForecastRefresh>=15000) calculate(undefined,true);
     if(data.source_warning) setError('Source connection interrupted; showing the last verified quote.');
 }
 async function refreshQuote() {
@@ -132,16 +138,19 @@ function connectQuotes() {
     socket.onclose = () => setTimeout(connectQuotes,15000);
     socket.onerror = () => socket.close();
 }
-for(const side of ['long','short']) $(''+side).addEventListener('click',()=>{direction=side;generation++;clearResults();$('long').setAttribute('aria-pressed',String(side==='long'));$('short').setAttribute('aria-pressed',String(side==='short'));});
-$('target').addEventListener('input',()=>{generation++;clearResults();});
-$('leverage').addEventListener('input',()=>{generation++;$('leverage-label').textContent=$('leverage').value+'×';clearResults();});
+function inputsChanged() {
+    generation++;
+    if(result) $('forecast-state').textContent=`Inputs changed. Still showing ${result.direction?.toUpperCase() || "previous"} target $${fmt(result.target_price)} (${result.leverage}×), calculated ${new Date(result.model.as_of_utc).toLocaleString()}. Press Calculate probability to use the new inputs.`;
+}
+for(const side of ['long','short']) $(''+side).addEventListener('click',()=>{direction=side;inputsChanged();$('long').setAttribute('aria-pressed',String(side==='long'));$('short').setAttribute('aria-pressed',String(side==='short'));});
+$('target').addEventListener('input',inputsChanged);
+$('leverage').addEventListener('input',()=>{inputsChanged();$('leverage-label').textContent=$('leverage').value+'×';});
 $('chart-horizon').addEventListener('change',()=>{if(result)$('projection-chart').innerHTML=projectionChart(result,Number($('chart-horizon').value));});
 $('forecast-form').addEventListener('submit',calculate);
 setInterval(()=>{
     if(newsData && Date.now()>=newsExpiresAt) renderNews(newsData,true);
     if(quote) showQuote(quote);
-    if(result && Date.now()-Date.parse(result.model.as_of_utc)>180000) clearResults();
-    if(quote && quote.market_open && Date.now()-Date.parse(quote.timestamp_utc)>120000){$('status').textContent='Quote too old · waiting for an update';$('status').dataset.status='unavailable';clearResults();}
+    if(quote && quote.market_open && Date.now()-Date.parse(quote.timestamp_utc)>120000){$('status').textContent='Quote too old · waiting for an update';$('status').dataset.status='unavailable';}
 },1000);
 function renderNews(data, preserveStatus = false) {
     newsData = data;

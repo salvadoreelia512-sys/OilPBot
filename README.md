@@ -24,8 +24,11 @@ There are no user inputs for OVX, required return, or data mode.
   receives updates through `/api/live` WebSocket, with one-second HTTP polling as
   fallback (including hosts that cannot proxy WebSockets). A separate TradingView website or widget connection can differ briefly due to
   transport latency. No zero-delay
-  guarantee is possible. Active forecasts refresh at most once every 15 seconds
-  without clearing the charts; their own reference price and timestamp remain visible.
+  guarantee is possible. Forecasts run only when Calculate probability is pressed. Quotes, news, elapsed
+  time and edited inputs do not recalculate or erase the last successful snapshot.
+  Its original target, reference price, calculation time and horizon end dates remain
+  visible. Input changes are marked until the user explicitly calculates again.
+  No cosmetic smoothing hides changes in a newly requested forecast.
 - During scheduled trading, quotes older than two minutes are refused automatically.
   During closures, the latest close is accepted only if no more than 15 minutes of
   scheduled trading have elapsed since its timestamp (and it is under 96 hours old).
@@ -240,3 +243,22 @@ iframe. A stale reference still returns 503 for forecasts; no alternate instrume
 or invented timestamp is substituted. The app uses one upstream stream per process,
 not one per browser. Free Render instances still sleep when idle; stream collection
 cannot continue while the instance is asleep. No paid add-on is needed.
+
+
+## Manual forecast snapshots and directional setup
+
+A calculation fixes all six horizon probabilities and charts to its calculation time.
+One-week and one-month horizons retain their original end dates; they do not silently
+roll forward with the live clock. Another click uses current price and evidence and
+can legitimately produce different probabilities. Failed requests retain the previous
+successful calculation. Monte Carlo margins describe sampling noise, not prediction
+accuracy. The model already shares deterministic random streams for repeatable results
+with the same inputs and evidence; freezing the display does not establish calibration.
+
+The directional setup appears below the calculation form, showing LONG or SHORT,
+an entry reference and separate one-week/one-month volatility-based target levels.
+When history or momentum does not support a direction, it explicitly shows a conditional
+breakout scenario in the user's selected direction. It never turns missing evidence
+into a supposedly validated recommendation. Its targets are distinct from the target
+entered for touch-probability calculation. A supported experimental momentum signal can
+select its own direction; all reference levels belong to that same frozen calculation.

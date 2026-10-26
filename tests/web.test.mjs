@@ -7,13 +7,13 @@ const script=readFileSync(new URL('../templates/app.js',import.meta.url),'utf8')
 const spot={price:75,symbol:'TVC:USOIL',timestamp_utc:new Date().toISOString(),status:'fresh',market_open:true,usable:true};
 const response=(status,body,type='application/json')=>new Response(typeof body==='string'?body:JSON.stringify(body),{status,headers:{'content-type':type}});
 function ui(fetchForecast){
- const timers=[], marketRequests=[];
+ const timers=[], marketRequests=[], intervals=[];
  const elements={};
  const get=id=>elements[id]??=( {value:id==='leverage'?'5':id==='target'?'78':id==='chart-horizon'?'168':'',textContent:'',innerHTML:'',hidden:false,dataset:{},disabled:false,events:{},children:[],append(...nodes){this.children.push(...nodes)},replaceChildren(){this.innerHTML='';this.children=[]},addEventListener(type,fn){this.events[type]=fn},setAttribute(key,value){this[key]=value}} );
- const context=vm.createContext({document:{getElementById:get,createElement:()=>({textContent:'',children:[],append(...nodes){this.children.push(...nodes)}})},fetch:async(path,options)=>path==='/api/market'?(marketRequests.push(options),response(200,{quote:spot})):path==='/api/news'?response(200,{sources:[],headlines:[]}):fetchForecast(path,options),AbortSignal,Date,console,setTimeout:(fn,ms)=>{timers.push({fn,ms});return 0},setInterval:()=>0});
+ const context=vm.createContext({document:{getElementById:get,createElement:()=>({textContent:'',children:[],append(...nodes){this.children.push(...nodes)}})},fetch:async(path,options)=>path==='/api/market'?(marketRequests.push(options),response(200,{quote:spot})):path==='/api/news'?response(200,{sources:[],headlines:[]}):fetchForecast(path,options),AbortSignal,Date,console,setTimeout:(fn,ms)=>{timers.push({fn,ms});return 0},setInterval:(fn,ms)=>{intervals.push({fn,ms});return 0}});
  vm.runInContext(script,context);
  const api=vm.runInContext('({calculate,render,clearResults,projectionChart,renderNews,refreshNews,applyQuote,connectQuotes})',context);
- return {get,api,context,timers,marketRequests};
+ return {get,api,context,timers,marketRequests,intervals};
 }
 const fixture=()=>({quote:spot,target_price:78,price_change_percent:4,leverage:5,leveraged_return_percent:20,horizons:[1,3,5,24,168].map((hours,i)=>({hours,label:['1 hour','3 hours','5 hours','1 day','1 week'][i],probability:.1*i})),projection:Array.from({length:169},(_,hours)=>({hours,median:75,low:74-hours/100,high:76+hours/100})),model:{basis:'Range model',as_of_utc:new Date().toISOString()}});
 const flush=()=>new Promise(resolve=>setImmediate(resolve));
@@ -36,9 +36,9 @@ test('HTML responses are handled without a JSON parsing crash',async()=>{
  const {get,api}=ui(async()=>response(200,'<!doctype html>','text/html'));
  await api.calculate();assert.match(get('error').textContent,/host did not return an API/);
 });
-test('changing direction clears prior results',async()=>{
+test('changing direction keeps the snapshot and marks inputs changed',async()=>{
  const {get,api}=ui(async()=>response(200,fixture()));await api.calculate();
- get('short').events.click();assert.doesNotMatch(get('cards').innerHTML,/40.0%/);assert.equal(get('short')['aria-pressed'],'true');
+ get('short').events.click();assert.match(get('cards').innerHTML,/40.0%/);assert.match(get('forecast-state').textContent,/Inputs changed/);assert.equal(get('short')['aria-pressed'],'true');
 });
 test('market-closed quotes are labelled and not called live',async()=>{
  const data=fixture();data.quote={...spot,status:'market_closed',market_open:false};
@@ -88,18 +88,20 @@ test('quotes poll every second without browser caching or redundant forecasts',a
  assert.equal(timers.findLast(t=>t.ms===1000).ms,1000);
 });
 
-test('a changed quote recalculates the forecast and an unusable quote clears it',async()=>{
+test('changed or stale quotes never recalculate or clear the snapshot',async()=>{
  let forecasts=0;
- const {api,get,timers,context}=ui(async()=>{forecasts++;return response(200,fixture())});
+ const {api,get,timers,intervals}=ui(async()=>{forecasts++;return response(200,fixture())});
  await flush();await api.calculate();
  try {
   spot.price=75.5;
-  vm.runInContext('lastForecastRefresh=0',context);
   await timers.findLast(t=>t.ms===1000).fn();await flush();
-  assert.equal(forecasts,2);
+  assert.equal(forecasts,1);
   spot.usable=false;
   await timers.findLast(t=>t.ms===1000).fn();
-  assert.doesNotMatch(get('cards').innerHTML,/40.0%/);
+  intervals[0].fn();
+  assert.match(get('cards').innerHTML,/40.0%/);
+  assert.equal(forecasts,1);
+  await api.calculate();
   assert.equal(forecasts,2);
  } finally {spot.price=75;spot.usable=true;}
 });
@@ -164,4 +166,33 @@ test('news rejects expired, future and undated articles in the browser',async()=
  api.renderNews(data,true);
  assert.equal(get('news').children.length,1);
  assert.match(get('news').children[0].textContent,/No matching oil headlines.*last 24 hours/);
+});
+
+
+test('directional setup sits below the form and shows explicit entry and targets',async()=>{
+ const data=fixture();
+ data.outlook={setup:{direction:'short',entry_price:74,entry_condition:'break below',week_target:72,month_target:70,status:'conditional scenario',basis:'No supported signal.',notice:'Reference levels only.'}};
+ data.evidence={observations:1,news:{coverage:0,sources:[],headlines:[]},validation:'Uncalibrated',unmodeled:''};
+ const {api,get}=ui(async()=>response(200,data));
+ await flush();await api.calculate();
+ assert.equal(get('setup-direction').textContent,'SHORT');
+ assert.equal(get('setup-entry').textContent,'break below $74.00');
+ assert.equal(get('setup-week').textContent,'$72.00');
+ assert.equal(get('setup-month').textContent,'$70.00');
+ assert.equal(get('setup-levels').hidden,false);
+ const html=readFileSync(new URL('../templates/index.html',import.meta.url),'utf8');
+ assert.ok(html.indexOf('id="action-section"')>html.indexOf('</form>'));
+ assert.ok(html.indexOf('id="action-section"')<html.indexOf('</aside>'));
+});
+
+test('an old forecast stays visible while the clock and live feed advance',async()=>{
+ let calls=0;const data=fixture();data.model.as_of_utc=new Date(Date.now()-86400000).toISOString();
+ const {api,get,intervals}=ui(async()=>{calls++;return response(200,data)});
+ await flush();await api.calculate();
+ const before=get('cards').innerHTML;
+ intervals[0].fn();
+ api.applyQuote({quote:{...spot,price:77,usable:false}});
+ assert.equal(get('cards').innerHTML,before);
+ assert.equal(calls,1);
+ assert.match(get('forecast-state').textContent,/Fixed snapshot/);
 });
