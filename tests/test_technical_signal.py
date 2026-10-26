@@ -117,3 +117,16 @@ def test_current_session_is_used_only_after_its_new_york_close(tmp_path,monkeypa
     assert morning['as_of_bar']=='2026-10-23'
     assert evening['as_of_bar']=='2026-10-26'
     assert datetime.fromisoformat(evening['valid_until']).astimezone(signal.NY).date()==date(2026,10,27)
+
+
+def test_low_agreement_scenario_is_separate_from_qualified_rule():
+    setup={'direction':None,'score':.125,'weekly':{'score':0},'daily':{'indicators':[]},'levels':{'long':{},'short':{}}}
+    side,basis=signal.choose_scenario(setup)
+    assert side=='long' and 'not covered' in basis
+    assert setup['direction'] is None
+    setup['score']=0;setup['weekly']['score']=-.25
+    side,basis=signal.choose_scenario(setup)
+    assert side=='short' and 'Weekly' in basis
+    setup['weekly']['score']=0;setup['daily']['indicators']=[{'name':'EMA 50','value':90},{'name':'EMA 200','value':95}]
+    side,basis=signal.choose_scenario(setup)
+    assert side=='short' and 'EMA' in basis

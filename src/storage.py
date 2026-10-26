@@ -144,9 +144,10 @@ def save_signal(signal, now):
     """Deduplicate state changes and headline sets; never log every live tick."""
     headlines=signal['news'].get('headlines',[])
     news_ids=[hashlib.sha256(json.dumps([h['title'],h['url'],h['published_utc']]).encode()).hexdigest() for h in headlines]
-    key=[signal['rule_version'],signal['data_sha256'],signal['as_of_bar'],signal['direction'],signal['state'],signal['status'],sorted(signal['blocked_reasons']),news_ids]
+    key=[signal.get('scenario_policy','qualified-rule-v1'),signal['rule_version'],signal['data_sha256'],signal['as_of_bar'],signal['direction'],signal['state'],signal['status'],sorted(signal['blocked_reasons']),news_ids]
     sid=hashlib.sha256(json.dumps(key).encode()).hexdigest()
     compact={k:signal[k] for k in ('rule_version','data_sha256','as_of_bar','weekly_as_of','score','counts','setup','state','status','blocked_reasons','quote','news')}
+    compact.update({key:signal.get(key) for key in ('scenario_policy','scenario_basis','rule_direction','rule_eligible')})
     compact['historical_reliability_gate_passed']=signal['historical_validation'].get('reliability_gate_passed',False)
     with connect() as db:
         db.execute('INSERT INTO technical_signal_log VALUES (?,?,?,?,?) ON CONFLICT(id) DO NOTHING',

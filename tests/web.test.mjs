@@ -229,8 +229,22 @@ test('signal refreshes and live entry transitions do not calculate probabilities
  const data=signalFixture();data.setup={direction:'long',entry:76,invalidation:74,week_target:78,month_target:79};api.renderSignal(data);
  api.applyQuote({quote:{...spot,price:76.1}});
  assert.match(get('signal-current').textContent,/trigger crossed/);
- assert.match(get('outlook').textContent,/Watch only/);
+ assert.equal(get('outlook').textContent,'Model scenario: Long at $76.00/barrel');
  api.applyQuote({quote:{...spot,price:77}});
- assert.match(get('outlook').textContent,/do not chase/);
+ assert.match(get('signal-status').textContent,/do not chase/);
  assert.equal(posts,0);
+});
+
+
+test('failed validation does not hide a clearly labeled model scenario',async()=>{
+ const {api,get}=ui(async()=>response(200,fixture()));await flush();
+ const data=signalFixture();data.blocked_reasons=['No positive historical edge established; watch only'];
+ data.historical_validation.reliability_gate_passed=false;
+ api.renderSignal(data);
+ assert.equal(get('outlook').textContent,'Model scenario: Short at $74.00/barrel');
+ assert.match(get('signal-confidence').textContent,/not established/);
+ assert.doesNotMatch(get('outlook').textContent,/Recommended/);
+ api.applyQuote({quote:{...spot,usable:false}});
+ assert.equal(get('outlook').textContent,'Model scenario: Short at $74.00/barrel');
+ assert.match(get('signal-status').textContent,/stale/);
 });

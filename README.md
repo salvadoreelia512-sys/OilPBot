@@ -347,3 +347,24 @@ state/headline changes, not every price tick; it never places trades or fabricat
 performance. This supplies future audit evidence without flooding free storage.
 Runtime archive refreshes invalidate promotion against an unmatched frozen report;
 old report results retain their own data-end date. Monitor retained database storage.
+
+
+## Explicit model-scenario presentation
+
+The live panel always shows a clearly labeled directional price scenario when
+valid directional history/levels are available: `Model scenario: Short at $105.00/barrel`.
+This presentation is independent of the probability-form inputs and remains visible
+when the historical profitability gate fails. Operational notes (stale quote, closed
+market, expired/passed entry) and evidence quality are separate lines; displaying a
+scenario does not bypass the backend's stand-aside gate or place an order.
+
+Qualified technical direction is unchanged. For low agreement, display the sign of
+the combined score, then weekly bias, then the 50/200-day EMA trend as deterministic
+tie-breaks. Flat/tied or invalid history can still be unavailable; no direction or
+price is fabricated. `rule_direction`/`rule_eligible` retain the qualified-rule
+meaning, while `scenario_policy=directional-scenario-v1` identifies the display
+proposal. Weak-agreement proposals are not covered by the qualified-rule backtest.
+The paper ledger records the scenario policy and basis. The technical gauge now sits
+inside the readings/details section so its rating cannot overshadow the scenario's
+actual evidence status. No historical performance improvement is claimed by this
+presentation change.

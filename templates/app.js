@@ -199,37 +199,40 @@ function renderSignal(data) {
         $('setup-week').textContent='$'+fmt(setup.week_target);
         $('setup-month').textContent='$'+fmt(setup.month_target);
     }
-    $('setup-note').textContent=`Reference levels from daily session ${data.as_of_bar}, weekly session ${data.weekly_as_of}. Valid until ${new Date(data.valid_until).toLocaleString()}. ${data.notice} Week/month targets are alternative reference scenarios.`;
+    $('setup-note').textContent=`Reference levels from daily session ${data.as_of_bar}, weekly session ${data.weekly_as_of}. Valid until ${new Date(data.valid_until).toLocaleString()}. ${data.scenario_basis || ''} ${data.notice} Week/month targets are alternative reference scenarios.`;
     const report=data.historical_validation;
     const negative=Object.values(report.horizons || {}).some(v=>(v.heldout.net_mean_by_roundtrip_bps?.['25'] ?? 0)<0);
-    $('signal-confidence').textContent=report.reliability_gate_passed?'Historical technical rule passed its stated gate under assumed costs. The combined live/news action remains unvalidated.':negative?'Historical simulation includes negative average net returns. Watch levels only; no proven best action.':'Historical advantage is not established: conditional watch levels, not a proven best action.';
+    $('signal-confidence').textContent=data.rule_eligible===false?'Low technical agreement: this displayed model direction is not covered by the qualified-rule backtest.':report.reliability_gate_passed?'Historical technical rule passed its stated gate under assumed costs. The combined live/news action remains unvalidated.':negative?'Historical simulation includes negative average net returns. Watch levels only; no proven best action.':'Historical advantage is not established: conditional watch levels, not a proven best action.';
     $('signal-indicators').textContent=`Daily: ${data.daily.indicators.map(i=>i.name+': '+({1:'buy',0:'neutral','-1':'sell'}[i.vote])).join(' · ')}. Weekly: ${data.weekly.indicators.map(i=>i.name+': '+({1:'buy',0:'neutral','-1':'sell'}[i.vote])).join(' · ')}.`;
     const lines=[];
     for(const [h,v] of Object.entries(report.horizons || {})) {
         const r=v.heldout;
         lines.push(r.trades?`${h}: ${r.trades} held-out trades; mean net return after assumed 25 bps ${ (r.net_mean_by_roundtrip_bps['25']*100).toFixed(2)}%; block interval ${r.mean_net_return_95pct_block_interval_at_25bps.map(x=>(x*100).toFixed(2)+'%').join(' to ')}.`:`${h}: no triggered trades in the evaluated sample.`);
     }
-    $('signal-validation').textContent=lines.join(' ')+' Fixed rule, daily OHLC stop-first assumptions, gaps and assumed costs. Actual broker fills/financing, news filter and live intraday timing are not validated. Report through '+(report.data_last_bar || 'unknown')+'.';
+    $('signal-validation').textContent=lines.join(' ')+' Fixed rule, daily OHLC stop-first assumptions, gaps and assumed costs. Actual broker fills/financing, news filter and live intraday timing are not validated. Report through '+(report.data_last_bar || 'unknown')+'. Historical results cover qualified technical agreement, not every low-agreement model scenario.';
     updateSignalQuote(quote || data.quote);
 }
 function updateSignalQuote(value) {
     if(!liveSignal) return;
-    const data=liveSignal,setup=data.setup,blocked=[...data.blocked_reasons];
-    if(!data.historical_validation.reliability_gate_passed) blocked.push('No positive historical edge established; watch only');
-    if((!value.usable || value.market_open && Date.now()-Date.parse(value.timestamp_utc)>120000) && !blocked.includes('The live quote is stale'))blocked.push('The live quote is stale');
-    if(!value.market_open && !blocked.includes('Market closed'))blocked.push('Market closed');
-    if(Date.now()>=Date.parse(data.valid_until))blocked.push('Setup expired; waiting for a newer completed session');
-    $('signal-current').textContent=`Current $${fmt(value.price)} · quote ${new Date(value.timestamp_utc).toLocaleString()} · technical check ${new Date(data.generated_at_utc).toLocaleString()}`;
-    if(!setup){$('outlook').textContent='No clear daily/weekly agreement — no entry suggested.';return;}
+    const data=liveSignal,setup=data.setup;
+    const blocked=[...data.blocked_reasons].filter(r=>!r.includes('historical edge')&&!r.includes('agreement is weak'));
+    if(!value.usable || value.market_open && Date.now()-Date.parse(value.timestamp_utc)>120000)blocked.push('The live quote is stale');
+    if(!value.market_open)blocked.push('Market closed');
+    if(Date.now()>=Date.parse(data.valid_until))blocked.push('Scenario expired; waiting for a newer completed session');
+    $('signal-current').textContent=`Current $${fmt(value.price)} · quote ${new Date(value.timestamp_utc).toLocaleString()} · model check ${new Date(data.generated_at_utc).toLocaleString()}`;
+    if(!setup){$('outlook').textContent='Model scenario unavailable';$('signal-status').textContent=data.scenario_basis || 'No directional scenario from the available data.';return;}
+    const side=setup.direction==='long'?'Long':'Short';
+    $('outlook').textContent=`Model scenario: ${side} at $${fmt(setup.entry)}/barrel`;
     const sign=setup.direction==='long'?1:-1,beyond=sign*(value.price-setup.entry);
     $('signal-current').textContent+=beyond>=0?' · Reference trigger crossed':` · $${fmt(Math.abs(value.price-setup.entry))} to entry trigger`;
-    if(beyond>.25*data.atr_14){$('outlook').textContent='Entry reference has passed — do not chase; wait for a new setup.';return;}
-    if(blocked.length){$('outlook').textContent=`Watch only: ${setup.direction.toUpperCase()} reference ${sign>0?'above':'below'} $${fmt(setup.entry)} per barrel. Stand aside · `+[...new Set(blocked)].join(' · ');return;}
-    $('outlook').textContent=beyond>=0?`${setup.direction.toUpperCase()} reference trigger crossed. Check the live quote; no order has been placed.`:`Conditional: ${setup.direction.toUpperCase()} only if price ${sign>0?'breaks above':'breaks below'} $${fmt(setup.entry)} per barrel.`;
+    if(beyond>.25*data.atr_14){$('signal-status').textContent='Entry reference has passed — not a fresh entry; do not chase.';return;}
+    if(blocked.length){$('signal-status').textContent=[...new Set(blocked)].join(' · ');return;}
+    $('signal-status').textContent=beyond>=0?'Reference trigger reached. The displayed entry is not a guaranteed fill; no order has been placed.':`Entry condition: price must ${sign>0?'break above':'break below'} $${fmt(setup.entry)}. This is a model scenario, not a validated entry instruction.`;
 }
+
 async function refreshSignal() {
     try { renderSignal(await api('/api/signal')); }
-    catch(error){liveSignal=null;$('setup-levels').hidden=true;$('signal-gauge').innerHTML='<p class="muted">Signal unavailable</p>';$('signal-current').textContent='';$('setup-note').textContent='';$('outlook').textContent='Live setup unavailable · '+error.message;$('signal-confidence').textContent='No current action is suggested.';}
+    catch(error){liveSignal=null;$('setup-levels').hidden=true;$('signal-gauge').innerHTML='<p class="muted">Signal unavailable</p>';$('signal-current').textContent='';$('setup-note').textContent='';$('outlook').textContent='Model scenario unavailable';$('signal-status').textContent=error.message;$('signal-confidence').textContent='No current action is suggested.';}
     finally {setTimeout(refreshSignal,15000);}
 }
 async function refreshNews() {

@@ -91,6 +91,21 @@ def technical_setup(bars,asof):
             'valid_until':datetime.combine(next_session(date.fromisoformat(known[-1]['date'])),time(17),NY).astimezone(timezone.utc).isoformat()}
 
 
+def choose_scenario(setup):
+    """Presentation choice, separate from the historically tested eligibility gate."""
+    if setup['direction']:
+        return setup['direction'],'Qualified daily/weekly technical bias; profitability gate is separate'
+    signals=[(setup['score'],'Weak combined technical bias'),
+             (setup['weekly']['score'],'Weekly bias used to break a neutral combined score')]
+    readings={v['name']:v['value'] for v in setup['daily']['indicators']}
+    signals.append((readings.get('EMA 50',0)-readings.get('EMA 200',0),'Long-term EMA trend used to break tied votes'))
+    for value,basis in signals:
+        if value:
+            side='long' if value>0 else 'short'
+            return (side,basis+'; low-agreement scenario is not covered by the qualified-rule backtest') if side in setup['levels'] else (None,'No valid positive-price scenario')
+    return None,'Flat/tied history provides no directional scenario'
+
+
 @lru_cache(maxsize=4)
 def cached_setup(fingerprint,asof,rows):
     bars=[dict(zip(('date','open','high','low','close'),row)) for row in rows]
@@ -112,8 +127,10 @@ def live_signal(snapshot,quote,news,now):
     refresh_if_needed(now+timedelta(days=1) if local.hour>=17 else now,setup['as_of_bar'])
     report=validation_report(REPORT_PATH.stat().st_mtime_ns) if REPORT_PATH.exists() else {}
     matches=report.get('data_sha256')==fingerprint and report.get('rule_version')==RULE_VERSION
-    selected=setup['levels'].get(setup['direction'])
+    scenario_direction,scenario_basis=choose_scenario(setup)
+    selected=setup['levels'].get(scenario_direction)
     blocked=[]
+    if not setup['direction']:blocked.append('Technical agreement is weak; model scenario only')
     if not (matches and report.get('reliability_gate_passed')):blocked.append('No positive historical edge established; watch only')
     if not quote['usable']:blocked.append('The live quote is stale')
     if not quote['market_open']:blocked.append('Market closed')
@@ -135,10 +152,12 @@ def live_signal(snapshot,quote,news,now):
             if sign*(snapshot.price-selected['entry'])>.25*setup['atr_14']:
                 state='entry_passed';blocked.append('Entry reference has passed; do not chase')
     else:blocked.append('Daily and weekly trend agreement is insufficient')
-    return {**setup,'quote':quote,'setup':selected,'state':state,'status':'stand_aside' if blocked else 'conditional_watch',
+    return {**setup,'direction':scenario_direction,'rule_direction':setup['direction'],'rule_eligible':bool(setup['direction']),
+            'scenario_policy':'directional-scenario-v1','scenario_basis':scenario_basis,'presentation':'model_scenario',
+            'quote':quote,'setup':selected,'state':state,'status':'stand_aside' if blocked else 'conditional_watch',
             'blocked_reasons':blocked,'generated_at_utc':now.isoformat(),'data_sha256':fingerprint,
             'historical_validation':{**report,'current_archive_matches':matches,'reliability_gate_passed':bool(matches and report.get('reliability_gate_passed'))} if report.get('rule_version')==RULE_VERSION else {'reliability_gate_passed':False,'reason':'No matching historical rule report'},
             'news':{'coverage':news['coverage'],'sources':len(news['sources']),'risk_scale':news['vol_multiplier'],
                     'headlines':news['headlines'][:3],'directional_effect_validated':False},
-            'notice':'Conditional daily/weekly breakout setup. Indicator agreement is not a winning probability. News is a risk filter, not a proven directional predictor. No orders are placed.',
+            'notice':'Unvalidated model scenario, not a proven trade recommendation. Conditional daily/weekly breakout setup. Indicator agreement is not a winning probability. News is a risk filter, not a proven directional predictor. No orders are placed.',
             'levels_basis':'20 completed daily high/low breakout; 14-day ATR buffer, 1.5 ATR invalidation, 2/3 ATR alternative week/month targets. Regular sessions only; holiday exceptions may differ.'}
